@@ -1,0 +1,15 @@
+{
+  "name": "battle-of-sexes-games-server",
+  "version": "1.0.0",
+  "description": "Лёгкий WebSocket-сервер: только матчмейкинг и ретрансляция ходов/чата, без БД",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
