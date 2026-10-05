@@ -38,8 +38,24 @@ const GAME_IDS = new Set(GAMES.map(g => g.id));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   let reqPath = decodeURIComponent(req.url.split('?')[0]);
+
+  // Проверка английского слова для «Виселицы». Игровой процесс от этого
+  // сервиса не зависит: словарь используется только при вводе слова.
+  if (reqPath === '/api/check-word') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const word = new URL(req.url, `http://${req.headers.host || 'localhost'}`).searchParams.get('word') || '';
+    if (!/^[a-z]+$/i.test(word) || word.length < 2 || word.length > 24) {
+      res.writeHead(200); return res.end(JSON.stringify({ valid:false }));
+    }
+    try {
+      const r = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(word));
+      res.writeHead(200); return res.end(JSON.stringify({ valid:r.ok }));
+    } catch (e) {
+      res.writeHead(200); return res.end(JSON.stringify({ valid:null }));
+    }
+  }
   if (reqPath === '/') reqPath = '/index.html';
   const filePath = path.join(PUBLIC_DIR, reqPath);
   if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end(); }
@@ -58,7 +74,7 @@ let nextId = 1;
 const clients = new Map(); // ws -> session
 const queues = new Map();  // gameId -> Set(session)
 GAMES.forEach(g => queues.set(g.id, new Set()));
-const rooms = new Map();   // roomId -> {a, b, game}
+const rooms = new Map();   // roomId -> {a, b, game, rematch:Set}
 let nextRoomId = 1;
 
 function otherGender(g) {
@@ -149,7 +165,7 @@ function makeRoom(gameId, a, b) {
   queues.get(gameId).delete(b);
   a.room = roomId; b.room = roomId;
   a.pendingProposal = null; b.pendingProposal = null;
-  rooms.set(roomId, { game: gameId, a, b });
+  rooms.set(roomId, { game: gameId, a, b, rematch: new Set() });
   safeSend(a.ws, { type: 'match_confirmed', opponent: publicProfile(b), youAre: 'A', game: gameId });
   safeSend(b.ws, { type: 'match_confirmed', opponent: publicProfile(a), youAre: 'B', game: gameId });
 }
@@ -268,10 +284,27 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'rematch_request': {
+        if (!session.room) return;
+        const room = rooms.get(session.room);
+        if (!room) return;
+        room.rematch.add(session.id);
+        const opp = room.a === session ? room.b : room.a;
+        if (room.rematch.size >= 2) {
+          room.rematch.clear();
+          safeSend(room.a.ws, { type: 'rematch_start' });
+          safeSend(room.b.ws, { type: 'rematch_start' });
+        } else if (opp) {
+          safeSend(opp.ws, { type: 'rematch_waiting' });
+        }
+        break;
+      }
+
       case 'leave_room': {
         if (session.room) {
           const room = rooms.get(session.room);
           if (room) {
+            room.rematch.clear();
             const opp = room.a === session ? room.b : room.a;
             if (opp) safeSend(opp.ws, { type: 'opponent_left' });
           }
@@ -306,6 +339,9 @@ setInterval(() => {
   tryMatchAll();
 }, 3000);
 
-server.listen(PORT, () => {
-  console.log(`Server listening on :${PORT}`);
+// Явно слушаем 0.0.0.0 — на Render (и большинстве PaaS) прокси стучится
+// снаружи контейнера, и если слушать только 127.0.0.1, снаружи сервис
+// недоступен и деплой зависает на "Application loading...".
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server listening on 0.0.0.0:${PORT}`);
 });

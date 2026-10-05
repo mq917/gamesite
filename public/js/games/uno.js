@@ -3,6 +3,7 @@ window.GAME_MODULES = window.GAME_MODULES || {};
 
 window.GAME_MODULES.uno = function(ctx){
   const { container, youAre, sendMove, setStatus } = ctx;
+  const T = window.I18N.t;
   const COLORS = ['red','green','blue','yellow'];
   const COLOR_HEX = { red:'#E5453F', green:'#2E9E5B', blue:'#3266D6', yellow:'#E8B92E', wild:'#3a3a44' };
 
@@ -99,7 +100,7 @@ window.GAME_MODULES.uno = function(ctx){
   }
 
   function render(){
-    oppRow.textContent = `У соперника карт: ${oppHandCount}`;
+    oppRow.textContent = T('uno_opp_cards',{n:oppHandCount});
     discardWrap.innerHTML='';
     const top = discard[discard.length-1];
     const tc = cardEl(top);
@@ -148,7 +149,7 @@ window.GAME_MODULES.uno = function(ctx){
   }
 
   function afterPlayEffects(card, isMine){
-    if(myHand.length===0 && isMine){ over=true; render(); setStatus('Ты выиграл(а)! 🎉'); return; }
+    if(myHand.length===0 && isMine){ over=true; render(); setStatus(T('uno_you_win')); return; }
     let nextTurn = turn==='A'?'B':'A';
     if(card.kind==='skip' || card.kind==='reverse'){
       nextTurn = turn; // в игре на двоих skip/reverse = ход остаётся у текущего игрока
@@ -163,14 +164,41 @@ window.GAME_MODULES.uno = function(ctx){
     updateStatus();
   }
 
+  function drawCards(count){
+    const drawn=[];
+    for(let n=0;n<count;n++){
+      if(deck.length===0){
+        // Перемешиваем сброс, кроме верхней карты. Новая последовательность
+        // отправляется сопернику вместе с результатом, поэтому копии колоды
+        // никогда не расходятся.
+        if(discard.length>1){
+          const top=discard[discard.length-1];
+          deck=discard.slice(0,-1);
+          for(let i=deck.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[deck[i],deck[j]]=[deck[j],deck[i]];}
+          discard=[top];
+        }
+      }
+      if(deck.length===0) break;
+      drawn.push(deck.pop());
+    }
+    return drawn;
+  }
+
   function tryDraw(){
     if(over || turn!==youAre || pendingChoice) return;
     const count = (drawPending && drawPending.target===turn) ? drawPending.count : 1;
-    const drawn = deck.splice(0, count);
+    const drawn = drawCards(count);
+    if(!drawn.length){
+      // Нечего брать — просто передаём ход, чтобы игра не зависала.
+      drawPending=null;
+      const nextTurn=turn==='A'?'B':'A';
+      sendMove({type:'draw_result',count:0,drawn:[],deckRest:deck,nextTurn});
+      turn=nextTurn; render(); updateStatus(); return;
+    }
     myHand.push(...drawn);
     drawPending = null;
     const nextTurn = turn==='A'?'B':'A';
-    sendMove({ type:'draw_result', count, nextTurn });
+    sendMove({ type:'draw_result', count:drawn.length, drawn, deckRest:deck, nextTurn });
     turn = nextTurn;
     render(); updateStatus();
   }
@@ -178,16 +206,17 @@ window.GAME_MODULES.uno = function(ctx){
   function updateStatus(){
     if(over) return;
     if(!myHand.length && oppHandCount===undefined){ return; }
-    setStatus(turn===youAre ? 'Твой ход' : 'Ход соперника');
+    setStatus(turn===youAre ? T('uno_your_turn') : T('uno_opp_turn'));
   }
 
   if(iAmDealer){
     startGameAsDealer();
   } else {
-    setStatus('Соперник раздаёт карты…');
+    setStatus(T('uno_dealing'));
   }
 
-  return {
+  return { isOver:()=>over,
+
     receiveMove(payload){
       if(payload.type==='deal'){
         myHand = payload.handB;
@@ -204,14 +233,15 @@ window.GAME_MODULES.uno = function(ctx){
         discard.push(card);
         currentColor = card.color==='wild' ? payload.chosenColor : card.color;
         oppHandCount = Math.max(0, oppHandCount-1);
-        if(oppHandCount===0){ over=true; render(); setStatus('Соперник выиграл.'); return; }
+        if(oppHandCount===0){ over=true; render(); setStatus(T('uno_opp_win')); return; }
         afterPlayEffects(card, false);
         return;
       }
       if(payload.type==='draw_result'){
-        // соперник вытянул карту(ы) из общей колоды — уберём столько же и из своей копии, чтобы колоды не разошлись
-        deck.splice(0, payload.count);
-        oppHandCount += payload.count;
+        // Авторитетное состояние колоды приходит от игрока, который тянул карты.
+        // Это устраняет рассинхронизацию после перераспределения сброса.
+        deck = Array.isArray(payload.deckRest) ? payload.deckRest : deck;
+        oppHandCount += Number(payload.count)||0;
         turn = payload.nextTurn;
         render(); updateStatus();
         return;

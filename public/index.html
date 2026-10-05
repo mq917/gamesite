@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Игра на двоих — битва полов</title>
+<title>Two-Player Arena — battle of the sexes</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚔️</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,51 +18,54 @@
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark">⚔</span>
-      <span class="brand-text">ИГРА&nbsp;НАДВОИХ</span>
+      <span class="brand-text" data-i18n="brand">TWO-PLAYER ARENA</span>
     </div>
     <div class="topbar-right">
-      <span class="online-pill" id="onlinePill" title="Игроков онлайн сейчас">
+      <span class="online-pill" id="onlinePill" data-i18n-title="online_tooltip" title="Players online right now">
         <span class="dot"></span>
         <span id="onlineCount">—</span>
       </span>
-      <button class="theme-toggle" id="themeToggle" aria-label="Сменить тему">🌙</button>
+      <button class="lang-toggle" id="langToggle" aria-label="Switch language" type="button">
+        <span data-lang-btn="en">EN</span><span class="lang-sep">/</span><span data-lang-btn="ru">RU</span><span class="lang-sep">/</span><span data-lang-btn="az">AZ</span>
+      </button>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">🌙</button>
     </div>
   </header>
 
   <!-- ===== SETUP MODAL (nick / gender / age) ===== -->
   <div class="modal-backdrop" id="setupBackdrop">
     <div class="modal setup-modal">
-      <h1 class="setup-title">Как к тебе<br>обращаться?</h1>
-      <p class="setup-sub">Без регистрации. Всё хранится только в этой вкладке.</p>
+      <h1 class="setup-title" id="setupTitle" data-i18n="setup_title">What should<br>we call you?</h1>
+      <p class="setup-sub" data-i18n="setup_sub">No sign-up. Everything stays only in this tab.</p>
 
       <label class="field">
-        <span>Никнейм</span>
-        <input id="nickInput" maxlength="20" placeholder="Например, Ветерок" autocomplete="off">
+        <span data-i18n="nick_label">Nickname</span>
+        <input id="nickInput" maxlength="20" data-i18n-placeholder="nick_placeholder" placeholder="e.g. Breezy" autocomplete="off">
       </label>
 
       <div class="field">
-        <span>Твой пол</span>
+        <span data-i18n="gender_label">Your gender</span>
         <div class="segmented" id="genderSeg">
-          <button type="button" data-val="m">♂ Мужской</button>
-          <button type="button" data-val="f">♀ Женский</button>
-          <button type="button" data-val="o">✧ Не скажу</button>
+          <button type="button" data-val="m" data-i18n="gender_m">♂ Male</button>
+          <button type="button" data-val="f" data-i18n="gender_f">♀ Female</button>
+          <button type="button" data-val="o" data-i18n="gender_o">✧ Rather not say</button>
         </div>
       </div>
 
       <label class="field">
-        <span>Возраст: <b id="ageLabel">25</b></span>
+        <span id="ageFieldLabel"><span data-i18n="age_label_prefix">Age:</span> <b id="ageLabel">25</b></span>
         <input type="range" id="ageInput" min="13" max="80" value="25">
       </label>
 
-      <button class="btn-primary btn-block" id="setupContinue">Продолжить →</button>
+      <button class="btn-primary btn-block" id="setupContinue" data-i18n="setup_continue">Continue →</button>
     </div>
   </div>
 
   <!-- ===== LOBBY ===== -->
   <main class="lobby" id="lobby" hidden>
     <div class="lobby-head">
-      <h1>Выбери игру</h1>
-      <p>Соперник — противоположного пола, максимально близкий по возрасту. Пара подбирается и подтверждается обеими сторонами.</p>
+      <h1 data-i18n="lobby_h1">Choose a game</h1>
+      <p data-i18n="lobby_p">Your opponent will be of the opposite gender, as close in age as possible. A match needs approval from both sides.</p>
     </div>
     <div class="game-grid" id="gameGrid"></div>
   </main>
@@ -71,30 +74,30 @@
   <div class="modal-backdrop" id="waitingBackdrop" hidden>
     <div class="modal waiting-modal">
       <div class="pulse-ring"><span id="waitingEmoji">🔎</span></div>
-      <h2 id="waitingTitle">Ищем соперника…</h2>
-      <p class="waiting-sub" id="waitingSub">Игра: —</p>
+      <h2 id="waitingTitle" data-i18n="waiting_title">Looking for an opponent…</h2>
+      <p class="waiting-sub" id="waitingSub">—</p>
       <div class="waiting-stats">
-        <div><b id="waitingCount">0</b><span>ждут этой игры</span></div>
-        <div><b id="waitingTolerance">±2</b><span>допуск по возрасту</span></div>
+        <div><b id="waitingCount">0</b><span data-i18n="waiting_of_game">waiting for this game</span></div>
+        <div><b id="waitingTolerance">±2</b><span data-i18n="waiting_tolerance">age tolerance</span></div>
       </div>
-      <button class="btn-ghost btn-block" id="cancelQueue">Отменить поиск</button>
+      <button class="btn-ghost btn-block" id="cancelQueue" data-i18n="cancel_search">Cancel search</button>
     </div>
   </div>
 
   <!-- ===== MATCH PROPOSAL ===== -->
   <div class="modal-backdrop" id="proposalBackdrop" hidden>
     <div class="modal proposal-modal">
-      <p class="proposal-eyebrow">Соперник найден</p>
+      <p class="proposal-eyebrow" data-i18n="proposal_eyebrow">Opponent found</p>
       <div class="opp-card">
         <div class="opp-avatar" id="oppAvatar">?</div>
         <div class="opp-name" id="oppName">—</div>
         <div class="opp-meta" id="oppMeta">—</div>
       </div>
       <div class="proposal-actions">
-        <button class="btn-decline" id="declineMatch">Пропустить</button>
-        <button class="btn-accept" id="acceptMatch">Играть!</button>
+        <button class="btn-decline" id="declineMatch" data-i18n="decline">Skip</button>
+        <button class="btn-accept" id="acceptMatch" data-i18n="accept">Play!</button>
       </div>
-      <p class="proposal-note">Если пропустишь — этот игрок больше не предложится, пока не закроешь вкладку.</p>
+      <p class="proposal-note" data-i18n="proposal_note">If you skip, this player won't be suggested again until you close the tab.</p>
     </div>
   </div>
 
@@ -102,27 +105,31 @@
   <section class="room" id="room" hidden>
     <div class="room-board-col">
       <div class="room-header">
-        <button class="btn-ghost btn-small" id="leaveRoom">← Выйти</button>
+        <button class="btn-ghost btn-small" id="leaveRoom" data-i18n="leave_room">← Leave</button>
         <div class="vs-strip">
-          <span class="vs-you" id="vsYou">Ты</span>
-          <span class="vs-x">vs</span>
-          <span class="vs-opp" id="vsOpp">Соперник</span>
+          <span class="vs-you" id="vsYou">You</span>
+          <span class="vs-x" data-i18n="vs">vs</span>
+          <span class="vs-opp" id="vsOpp">Opponent</span>
         </div>
         <span class="room-game-name" id="roomGameName"></span>
       </div>
       <div class="board-wrap" id="boardWrap"></div>
       <p class="board-status" id="boardStatus"></p>
+      <div class="finish-actions" id="finishActions" hidden>
+        <button class="btn-primary" id="rematchBtn" type="button" data-i18n="rematch">Rematch</button>
+        <button class="btn-ghost" id="backLobbyBtn" type="button" data-i18n="back_lobby">Back to lobby</button>
+      </div>
     </div>
 
     <aside class="room-side-col">
       <div class="ad-slot" id="adSlotSide">
-        <span>Место для рекламы</span>
+        <span data-i18n="ad_slot">Ad space</span>
       </div>
       <div class="chat-panel">
         <div class="chat-log" id="chatLog"></div>
         <div class="emoji-row" id="emojiRow"></div>
         <form class="chat-form" id="chatForm">
-          <input id="chatInput" maxlength="300" placeholder="Написать сопернику…" autocomplete="off">
+          <input id="chatInput" maxlength="300" data-i18n-placeholder="chat_placeholder" placeholder="Message your opponent…" autocomplete="off">
           <button type="submit">➤</button>
         </form>
       </div>
@@ -130,12 +137,13 @@
   </section>
 
   <div class="ad-slot ad-slot-bottom" id="adSlotBottom">
-    <span>Место для рекламы</span>
+    <span data-i18n="ad_slot">Ad space</span>
   </div>
 
   <div class="toast" id="toast"></div>
 </div>
 
+<script src="js/i18n.js"></script>
 <script src="js/games/tictactoe.js"></script>
 <script src="js/games/gomoku.js"></script>
 <script src="js/games/reversi.js"></script>

@@ -4,6 +4,7 @@ window.GAME_MODULES = window.GAME_MODULES || {};
 // A = белые (снизу для A), B = чёрные.
 window.GAME_MODULES.chess = function(ctx){
   const { container, youAre, sendMove, setStatus } = ctx;
+  const T = window.I18N.t;
   const N=8, CELL=44;
   const WHITE='A', BLACK='B';
   const flip = youAre===BLACK;
@@ -203,12 +204,12 @@ window.GAME_MODULES.chess = function(ctx){
     render();
     if(!anyMoves){
       over=true;
-      if(inCheck) setStatus((next!==youAre ? 'Мат! Ты выиграл(а) 🎉' : 'Мат! Соперник выиграл.'));
-      else setStatus('Пат — ничья.');
+      if(inCheck) setStatus(next!==youAre ? T('chess_mate_win') : T('chess_mate_lose'));
+      else setStatus(T('chess_stalemate'));
       return;
     }
-    if(halfmoveNoCapture>=100){ over=true; setStatus('Ничья (50 ходов без взятий).'); return; }
-    setStatus((turn===youAre?'Твой ход':'Ход соперника') + (inCheck?' — шах!':''));
+    if(halfmoveNoCapture>=100){ over=true; setStatus(T('chess_50move')); return; }
+    setStatus((turn===youAre?T('your_turn'):T('opp_turn')) + (inCheck?T('chess_check_suffix'):''));
   }
   function hasAnyLegalMove(side){
     for(let r=0;r<N;r++)for(let c=0;c<N;c++){
@@ -240,13 +241,20 @@ window.GAME_MODULES.chess = function(ctx){
       }
     });
   }
-  setStatus(turn===youAre?'Твой ход (белые)':'Ход соперника');
+  setStatus(turn===youAre?T('chess_your_turn'):T('opp_turn'));
   render();
 
-  return {
+  return { isOver:()=>over,
+
     receiveMove(payload){
-      if(over) return;
+      if(over || !payload || !Array.isArray(payload.from) || !Array.isArray(payload.to)) return;
+      const [fr,fc]=payload.from, [tr,tc]=payload.to;
+      const p=board[fr] && board[fr][fc];
+      // При рассинхронизации не ломаем обработчик WebSocket.
+      if(!p || p.side!==turn) return;
+      if(!legalMovesFor(fr,fc).some(([r,c])=>r===tr&&c===tc)) return;
       doMove(payload.from, payload.to);
+      render();
     }
   };
 };

@@ -3,6 +3,7 @@ window.GAME_MODULES = window.GAME_MODULES || {};
 
 window.GAME_MODULES.reversi = function(ctx){
   const { container, youAre, sendMove, setStatus } = ctx;
+  const T = window.I18N.t;
   const N = 8, CELL = 42;
   const DIRS = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
   let board = Array.from({length:N}, ()=>Array(N).fill(null));
@@ -102,7 +103,7 @@ window.GAME_MODULES.reversi = function(ctx){
       // next пропускает ход
       turn = next==='A'?'B':'A';
       render();
-      setStatus((turn===youAre?'Ты ходишь':'Соперник ходит') + ' — у соперника не было ходов, ход пропущен');
+      setStatus(T('reversi_pass', { who: turn===youAre? T('your_turn') : T('opp_turn') }));
     }
   }
 
@@ -110,19 +111,20 @@ window.GAME_MODULES.reversi = function(ctx){
     let a=0,b=0;
     board.forEach(row=>row.forEach(v=>{ if(v==='A')a++; if(v==='B')b++; }));
     const myScore = youAre==='A'?a:b, oppScore = youAre==='A'?b:a;
-    if(myScore>oppScore) setStatus(`Игра окончена: ты выиграл(а) ${myScore}:${oppScore} 🎉`);
-    else if(myScore<oppScore) setStatus(`Игра окончена: соперник выиграл ${oppScore}:${myScore}`);
-    else setStatus(`Ничья ${myScore}:${myScore}`);
+    if(myScore>oppScore) setStatus(T('reversi_finish_win', {a:myScore,b:oppScore}));
+    else if(myScore<oppScore) setStatus(T('reversi_finish_lose', {a:oppScore,b:myScore}));
+    else setStatus(T('reversi_finish_draw', {a:myScore}));
   }
 
   function updateStatus(){
     if(over) return;
-    setStatus(turn===youAre?'Твой ход':'Ход соперника');
+    setStatus(turn===youAre?T('your_turn'):T('opp_turn'));
   }
 
   render(); updateStatus();
 
-  return {
+  return { isOver:()=>over,
+
     receiveMove(payload){
       if(over) return;
       const [r,c] = payload.index;

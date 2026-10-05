@@ -84,6 +84,16 @@ input{font-family:inherit;}
   border:2px solid var(--border-color); background:var(--surface); border-radius:999px;
   width:36px; height:36px; font-size:16px; display:flex; align-items:center; justify-content:center;
 }
+.lang-toggle{
+  border:2px solid var(--border-color); background:var(--surface); border-radius:999px;
+  height:36px; padding:0 12px; font-size:12px; font-weight:800; letter-spacing:.02em;
+  display:flex; align-items:center; gap:3px; color:var(--muted);
+}
+.lang-toggle [data-lang-btn]{ padding:2px 4px; border-radius:5px; }
+.lang-toggle[data-active="en"] [data-lang-btn="en"],
+.lang-toggle[data-active="ru"] [data-lang-btn="ru"],
+.lang-toggle[data-active="az"] [data-lang-btn="az"]{ color:var(--fg); background:var(--surface-2); }
+.lang-toggle .lang-sep{ opacity:.4; }
 
 /* ============ MODALS ============ */
 .modal-backdrop{
@@ -208,6 +218,12 @@ input{font-family:inherit;}
   min-height:280px; overflow:auto;
 }
 .board-status{text-align:center; margin-top:10px; font-weight:700; font-size:14px; min-height:20px;}
+
+
+.finish-actions{
+  display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin-top:14px;
+}
+.finish-actions button{min-width:150px;}
 
 .room-side-col{display:flex; flex-direction:column; gap:14px;}
 .ad-slot{

@@ -4,6 +4,7 @@ window.GAME_MODULES = window.GAME_MODULES || {};
 // A = "красные" (внизу для A), B = "белые". 8x8, тёмные клетки играбельны.
 window.GAME_MODULES.checkers = function(ctx){
   const { container, youAre, sendMove, setStatus } = ctx;
+  const T = window.I18N.t;
   const N = 8, CELL = 44;
   let board = Array.from({length:N}, ()=>Array(N).fill(null)); // {side:'A'|'B', king:bool}
   for(let r=0;r<3;r++)for(let c=0;c<N;c++) if((r+c)%2===1) board[r][c]={side:'B',king:false};
@@ -130,7 +131,7 @@ window.GAME_MODULES.checkers = function(ctx){
       const more = pieceCaptures(tr,tc,p);
       if(more.length){
         selected=[tr,tc]; legalForSelected=more; render();
-        setStatus(turn===youAre ? 'Продолжай взятие тем же ходом' : 'Соперник продолжает взятие');
+        setStatus(turn===youAre ? T('checkers_continue_you') : T('checkers_continue_opp'));
         return;
       }
     }
@@ -143,7 +144,7 @@ window.GAME_MODULES.checkers = function(ctx){
     const hasAny = hasAnyMove(next);
     if(!hasAny){
       over=true; render();
-      setStatus((turn===youAre?'Ты выиграл(а)! 🎉':'Соперник выиграл.'));
+      setStatus(turn===youAre?T('you_win'):T('opp_win'));
       return;
     }
     turn=next; render(); updateStatus();
@@ -180,17 +181,22 @@ window.GAME_MODULES.checkers = function(ctx){
   }
   function updateStatus(){
     if(over) return;
-    setStatus(turn===youAre?'Твой ход':'Ход соперника');
+    setStatus(turn===youAre?T('your_turn'):T('opp_turn'));
   }
 
   render(); updateStatus();
 
-  return {
+  return { isOver:()=>over,
+
     receiveMove(payload){
-      if(over) return;
-      const p = board[payload.from[0]][payload.from[1]];
-      if(!p) return;
-      doMove(payload.from, { to:payload.to, captured:payload.captured });
+      if(over || !payload || !Array.isArray(payload.from) || !Array.isArray(payload.to)) return;
+      const p = board[payload.from[0]] && board[payload.from[0]][payload.from[1]];
+      if(!p || p.side!==turn) return;
+      const moves=movesFor(payload.from[0],payload.from[1]);
+      const move=moves.find(m=>m.to[0]===payload.to[0]&&m.to[1]===payload.to[1]);
+      if(!move) return;
+      doMove(payload.from, {to:payload.to,captured:Array.isArray(payload.captured)?payload.captured:move.captured});
+      render();
     }
   };
 };

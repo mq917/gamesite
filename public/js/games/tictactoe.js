@@ -3,6 +3,7 @@ window.GAME_MODULES = window.GAME_MODULES || {};
 
 window.GAME_MODULES.tictactoe = function(ctx){
   const { container, youAre, sendMove, setStatus } = ctx;
+  const T = window.I18N.t;
   const SIZE = 5, WIN_LEN = 3;
   const myMark = youAre === 'A' ? '✕' : '◯';
   const oppMark = youAre === 'A' ? '◯' : '✕';
@@ -41,12 +42,12 @@ window.GAME_MODULES.tictactoe = function(ctx){
     if(win){
       over = true;
       win.forEach(idx=>cellEls[idx].style.background = 'var(--surface-2)');
-      setStatus(who === youAre ? 'Ты выиграл(а)! 🎉' : 'Соперник выиграл.');
+      setStatus(who === youAre ? T('you_win') : T('opp_win'));
       return;
     }
     if(cells.every(c=>c)){
       over = true;
-      setStatus('Ничья!');
+      setStatus(T('draw'));
       return;
     }
     turn = who === 'A' ? 'B' : 'A';
@@ -73,11 +74,12 @@ window.GAME_MODULES.tictactoe = function(ctx){
 
   function updateStatus(){
     if(over) return;
-    setStatus(turn === youAre ? `Твой ход (${myMark})` : `Ход соперника (${oppMark})`);
+    setStatus(turn === youAre ? T('ttt_your_mark',{mark:myMark}) : T('ttt_opp_mark',{mark:oppMark}));
   }
   updateStatus();
 
-  return {
+  return { isOver:()=>over,
+
     receiveMove(payload){
       if(over) return;
       place(payload.index, turn); // it's opponent's turn by construction

@@ -3,6 +3,7 @@ window.GAME_MODULES = window.GAME_MODULES || {};
 
 window.GAME_MODULES.gomoku = function(ctx){
   const { container, youAre, sendMove, setStatus } = ctx;
+  const T = window.I18N.t;
   const SIZE = 13, WIN_LEN = 5;
   const CELL = 26;
   let cells = Array(SIZE*SIZE).fill(null);
@@ -41,10 +42,10 @@ window.GAME_MODULES.gomoku = function(ctx){
     if(win){
       over = true;
       win.forEach(idx=>cellEls[idx].style.background = 'var(--surface-2)');
-      setStatus(who === youAre ? 'Ты выиграл(а)! 🎉' : 'Соперник выиграл.');
+      setStatus(who === youAre ? T('you_win') : T('opp_win'));
       return;
     }
-    if(cells.every(c=>c)){ over = true; setStatus('Ничья!'); return; }
+    if(cells.every(c=>c)){ over = true; setStatus(T('draw')); return; }
     turn = who === 'A' ? 'B' : 'A';
     updateStatus();
   }
@@ -66,10 +67,11 @@ window.GAME_MODULES.gomoku = function(ctx){
   }
   function updateStatus(){
     if(over) return;
-    setStatus(turn === youAre ? 'Твой ход' : 'Ход соперника');
+    setStatus(turn === youAre ? T('your_turn') : T('opp_turn'));
   }
   updateStatus();
 
-  return { receiveMove(payload){ if(over) return; place(payload.index, turn); } };
+  return { isOver:()=>over,
+ receiveMove(payload){ if(over) return; place(payload.index, turn); } };
 };
 })();

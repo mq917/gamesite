@@ -3,6 +3,7 @@ window.GAME_MODULES = window.GAME_MODULES || {};
 
 window.GAME_MODULES.battleship = function(ctx){
   const { container, youAre, sendMove, setStatus } = ctx;
+  const T = window.I18N.t;
   const N = 8, CELL = 32;
   const SHIP_SIZES = [4,3,3,2,2,1,1];
 
@@ -23,11 +24,11 @@ window.GAME_MODULES.battleship = function(ctx){
   setupBox.style.textAlign='center';
   const setupBtn=document.createElement('button');
   setupBtn.className='btn-primary';
-  setupBtn.textContent='🎲 Расставить флот и начать';
+  setupBtn.textContent=T('bs_setup_btn');
   setupBox.appendChild(setupBtn);
   const setupHint=document.createElement('p');
   setupHint.style.cssText='color:var(--muted);font-size:13px;margin-top:10px;max-width:280px;';
-  setupHint.textContent='Флот расставляется автоматически. Затем по очереди стреляете по полю соперника.';
+  setupHint.textContent=T('bs_setup_hint');
   setupBox.appendChild(setupHint);
   wrap.appendChild(setupBox);
 
@@ -38,7 +39,7 @@ window.GAME_MODULES.battleship = function(ctx){
   function label(text){ const d=document.createElement('div'); d.style.cssText='font-weight:800;font-size:12px;text-align:center;margin-bottom:6px;color:var(--muted);'; d.textContent=text; return d; }
 
   const myCol=document.createElement('div');
-  myCol.appendChild(label('Твоё поле'));
+  myCol.appendChild(label(T('bs_your_field')));
   const myGrid=document.createElement('div');
   myGrid.className='board-grid';
   myGrid.style.gridTemplateColumns=`repeat(${N}, ${CELL}px)`;
@@ -46,7 +47,7 @@ window.GAME_MODULES.battleship = function(ctx){
   myCol.appendChild(myGrid);
 
   const oppCol=document.createElement('div');
-  oppCol.appendChild(label('Поле соперника — стреляй сюда'));
+  oppCol.appendChild(label(T('bs_opp_field')));
   const oppGrid=document.createElement('div');
   oppGrid.className='board-grid';
   oppGrid.style.gridTemplateColumns=`repeat(${N}, ${CELL}px)`;
@@ -67,34 +68,73 @@ window.GAME_MODULES.battleship = function(ctx){
   function key(r,c){ return r+'_'+c; }
 
   function autoPlace(){
-    const occ = new Set();
-    const cells = new Map();
-    let shipId=0;
-    for(const size of SHIP_SIZES){
-      let placed=false, attempts=0;
-      while(!placed && attempts<400){
-        attempts++;
-        const horizontal = Math.random()<0.5;
-        const r = Math.floor(Math.random()* (horizontal?N:(N-size+1)));
-        const c = Math.floor(Math.random()* (horizontal?(N-size+1):N));
-        const coords=[];
-        for(let i=0;i<size;i++) coords.push(horizontal ? [r,c+i] : [r+i,c]);
-        let ok = coords.every(([rr,cc])=>rr<N&&cc<N);
-        if(ok){
-          for(const [rr,cc] of coords){
-            for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
-              const k=key(rr+dr,cc+dc);
-              if(occ.has(k)){ ok=false; }
-            }
-          }
+    // Надёжная расстановка с возвратом назад. Старый случайный алгоритм мог
+    // исчерпать попытки на плотном поле 8×8 и оставить флот неполным.
+    const occ=new Set(), cells=new Map();
+    const ships=SHIP_SIZES.slice();
+    const shuffled=(arr)=>{
+      for(let i=arr.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];}
+      return arr;
+    };
+    function canPlace(coords){
+      for(const [r,c] of coords){
+        if(r<0||r>=N||c<0||c>=N||occ.has(key(r,c))) return false;
+        for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+          if(occ.has(key(r+dr,c+dc))) return false;
         }
-        if(ok){
-          coords.forEach(([rr,cc])=>{ occ.add(key(rr,cc)); cells.set(key(rr,cc), shipId); });
-          placed=true; shipId++;
+      }
+      return true;
+    }
+    function placeShip(coords,id){
+      coords.forEach(([r,c])=>{occ.add(key(r,c));cells.set(key(r,c),id);});
+    }
+    function removeShip(coords){
+      coords.forEach(([r,c])=>{occ.delete(key(r,c));cells.delete(key(r,c));});
+    }
+    function candidates(size){
+      const out=[];
+      for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+        for(const horizontal of [true,false]){
+          const coords=[];
+          for(let i=0;i<size;i++) coords.push(horizontal?[r,c+i]:[r+i,c]);
+          if(canPlace(coords)) out.push(coords);
+        }
+      }
+      return shuffled(out);
+    }
+    function solve(i){
+      if(i===ships.length) return true;
+      const size=ships[i];
+      for(const coords of candidates(size)){
+        const id=i;
+        placeShip(coords,id);
+        if(solve(i+1)) return true;
+        removeShip(coords);
+      }
+      return false;
+    }
+    // Большие корабли сначала резко уменьшают ветвление.
+    const ordered=ships.slice().sort((a,b)=>b-a);
+    ships.splice(0,ships.length,...ordered);
+    if(!solve(0)){
+      // Теоретически на этом поле решение существует; если генератор всё же
+      // не нашёл его, разрешаем касание кораблей как безопасный fallback.
+      occ.clear(); cells.clear();
+      let id=0;
+      for(const size of ships){
+        let done=false;
+        for(let tries=0;tries<1000&&!done;tries++){
+          const horizontal=Math.random()<.5;
+          const r=Math.floor(Math.random()*(horizontal?N:N-size+1));
+          const c=Math.floor(Math.random()*(horizontal?N-size+1:N));
+          const coords=Array.from({length:size},(_,i)=>horizontal?[r,c+i]:[r+i,c]);
+          if(coords.every(([rr,cc])=>rr<N&&cc<N&& !occ.has(key(rr,cc)))){
+            placeShip(coords,id++); done=true;
+          }
         }
       }
     }
-    return { occ, cells };
+    return {occ,cells};
   }
 
   setupBtn.addEventListener('click', ()=>{
@@ -104,7 +144,7 @@ window.GAME_MODULES.battleship = function(ctx){
     ready = true;
     renderMyBoard();
     setupBtn.disabled = true;
-    setupBtn.textContent = 'Флот расставлен ✓';
+    setupBtn.textContent = T('bs_placed');
     sendMove({ type:'ready' });
     checkStart();
   });
@@ -122,11 +162,11 @@ window.GAME_MODULES.battleship = function(ctx){
       const k=key(r,c);
       const el=myCells[r][c];
       if(oppShotsKnown.has(k)){
-        el.style.background = oppShotsKnown.get(k)==='hit' ? '#D9502F' : 'var(--surface-2)';
+        el.style.background = oppShotsKnown.get(k)==='hit' ? '#D9502F' : 'var(--surface-2)'; el.textContent = oppShotsKnown.get(k)==='hit' ? '✹' : '•';
       } else if(myShips && myShips.has(k)){
-        el.style.background = '#8a97b3';
+        el.style.background = '#4b6f8f'; el.textContent = '■'; el.style.color = '#fff'; el.style.fontWeight='900'; el.style.textAlign='center'; el.style.lineHeight=CELL+'px';
       } else {
-        el.style.background = 'var(--surface)';
+        el.style.background = 'var(--surface)'; el.textContent='';
       }
     }
   }
@@ -146,7 +186,7 @@ window.GAME_MODULES.battleship = function(ctx){
     if(myShots.has(k)) return;
     myShots.delete(k);
     sendMove({ type:'shot', r, c });
-    setStatus('Ждём результат выстрела…');
+    setStatus(T('bs_waiting_result'));
   }
 
   function checkAllSunk(shipCellsMap, hitSet){
@@ -157,11 +197,12 @@ window.GAME_MODULES.battleship = function(ctx){
 
   function updateStatus(){
     if(over) return;
-    if(!started){ setStatus(ready ? 'Ждём, когда соперник расставит флот…' : 'Расставь свой флот, чтобы начать'); return; }
-    setStatus(turn===youAre ? 'Твой ход — стреляй по полю соперника' : 'Соперник целится…');
+    if(!started){ setStatus(ready ? T('bs_wait_opp_ready') : T('bs_ready_start')); return; }
+    setStatus(turn===youAre ? T('bs_your_shot') : T('bs_opp_aiming'));
   }
 
-  return {
+  return { isOver:()=>over,
+
     receiveMove(payload){
       if(payload.type==='ready'){
         oppReady = true;
@@ -184,7 +225,7 @@ window.GAME_MODULES.battleship = function(ctx){
         renderMyBoard();
         sendMove({ type:'result', r, c, hit, sunk, gameover: allSunk });
         const shooter = youAre==='A'?'B':'A';
-        if(allSunk){ over=true; setStatus('Соперник потопил весь твой флот 😢'); }
+        if(allSunk){ over=true; setStatus(T('bs_you_sunk')); }
         else { turn = hit ? shooter : youAre; updateStatus(); }
         return;
       }
@@ -192,7 +233,7 @@ window.GAME_MODULES.battleship = function(ctx){
         const { r, c, hit, sunk, gameover } = payload;
         myShots.set(key(r,c), hit?'hit':'miss');
         renderOppBoard();
-        if(gameover){ over=true; setStatus('Ты потопил весь флот соперника! 🎉'); return; }
+        if(gameover){ over=true; setStatus(T('bs_opp_sunk')); return; }
         const opp = youAre==='A'?'B':'A';
         turn = hit ? youAre : opp;
         updateStatus();

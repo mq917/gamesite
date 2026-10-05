@@ -4,6 +4,7 @@ window.GAME_MODULES = window.GAME_MODULES || {};
 // Упрощённые короткие нарды. points[0..23], значение = {side,count}. A движется 23->0, B движется 0->23.
 window.GAME_MODULES.backgammon = function(ctx){
   const { container, youAre, sendMove, setStatus } = ctx;
+  const T = window.I18N.t;
   const CELL_W = 30;
 
   let points = Array(24).fill(null);
@@ -31,7 +32,7 @@ window.GAME_MODULES.backgammon = function(ctx){
 
   const rollBtn=document.createElement('button');
   rollBtn.className='btn-primary';
-  rollBtn.textContent='🎲 Бросить кубики';
+  rollBtn.textContent=T('bg_roll');
   diceRow.appendChild(rollBtn);
 
   const diceDisplay=document.createElement('div');
@@ -62,7 +63,7 @@ window.GAME_MODULES.backgammon = function(ctx){
 
   const bearOffBtn=document.createElement('button');
   bearOffBtn.className='btn-primary';
-  bearOffBtn.textContent='⬆ Вывести шашку';
+  bearOffBtn.textContent=T('bg_bear_off');
   bearOffBtn.style.cssText='display:none;margin:10px auto 0;';
   wrap.appendChild(bearOffBtn);
   bearOffBtn.addEventListener('click', ()=>tryBearOff());
@@ -131,7 +132,7 @@ window.GAME_MODULES.backgammon = function(ctx){
     if(selected!==null && points[selected]) pointEls[selected].style.boxShadow='inset 0 0 0 3px var(--teal)';
     legalTargets().forEach(t=>{ if(pointEls[t]!==undefined) pointEls[t].style.boxShadow='inset 0 0 0 3px var(--coral)'; });
 
-    barEl.textContent = `На баре: ты ${bar[youAre]} · соперник ${bar[youAre==='A'?'B':'A']}  ·  Вышло: ты ${off[youAre]} · соперник ${off[youAre==='A'?'B':'A']}`;
+    barEl.textContent = T('bg_bar_line', { youBar:bar[youAre], oppBar:bar[youAre==='A'?'B':'A'], youOff:off[youAre], oppOff:off[youAre==='A'?'B':'A'] });
     bearOffBtn.style.display = (turn===youAre && dice.length && selected!==null && allInHome(turn)) ? 'block' : 'none';
     diceDisplay.innerHTML='';
     dice.forEach((d,i)=>{
@@ -274,7 +275,7 @@ window.GAME_MODULES.backgammon = function(ctx){
     }
   }
   function endTurnNoMoves(){
-    setStatus('Нет доступных ходов — ход переходит');
+    setStatus(T('bg_no_moves'));
     endTurn();
   }
   function endTurn(){
@@ -287,23 +288,24 @@ window.GAME_MODULES.backgammon = function(ctx){
   function checkWin(){
     let onBoardA=0,onBoardB=0;
     points.forEach(p=>{ if(p){ if(p.side==='A') onBoardA+=p.count; else onBoardB+=p.count; } });
-    // упрощение: bearing off не реализуем полностью — играем до полного вывода закомментировано,
-    // засчитываем победу когда у стороны не осталось шашек на доске и на баре
-    if(onBoardA===0 && bar.A===0){ over=true; setStatus(youAre==='A'?'Ты вывел(а) все шашки — победа! 🎉':'Соперник выиграл.'); }
-    else if(onBoardB===0 && bar.B===0){ over=true; setStatus(youAre==='B'?'Ты вывел(а) все шашки — победа! 🎉':'Соперник выиграл.'); }
+    // победа засчитывается, когда у стороны не осталось шашек ни на доске, ни на баре
+    // (то есть все 15 выведены через bearOff)
+    if(onBoardA===0 && bar.A===0){ over=true; setStatus(youAre==='A'?T('bg_you_win'):T('bg_opp_win')); }
+    else if(onBoardB===0 && bar.B===0){ over=true; setStatus(youAre==='B'?T('bg_you_win'):T('bg_opp_win')); }
   }
 
   function updateStatus(){
     if(over) return;
-    if(turn!==youAre){ setStatus('Ход соперника'); return; }
-    if(!dice.length) setStatus('Твой ход — брось кубики');
-    else setStatus('Твой ход — выбери шашку и клетку для хода');
+    if(turn!==youAre){ setStatus(T('bg_opp_turn')); return; }
+    if(!dice.length) setStatus(T('bg_your_turn_roll'));
+    else setStatus(T('bg_your_turn_move'));
   }
 
   rollBtn.style.display = (turn===youAre) ? 'inline-flex' : 'none';
   render(); updateStatus();
 
-  return {
+  return { isOver:()=>over,
+
     receiveMove(payload){
       if(over) return;
       if(payload.type==='roll'){

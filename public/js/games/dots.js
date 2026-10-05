@@ -3,6 +3,7 @@ window.GAME_MODULES = window.GAME_MODULES || {};
 
 window.GAME_MODULES.dots = function(ctx){
   const { container, youAre, sendMove, setStatus } = ctx;
+  const T = window.I18N.t;
   const BOXES = 4; // 4x4 клетки -> 5x5 точек
   const DOTS = BOXES+1;
   const GAP = 52;
@@ -115,7 +116,7 @@ window.GAME_MODULES.dots = function(ctx){
     if(score.A+score.B === totalBoxes){
       over=true;
       const my=score[youAre], opp=score[youAre==='A'?'B':'A'];
-      setStatus(my>opp? `Победа! ${my}:${opp} 🎉` : my<opp? `Поражение ${my}:${opp}` : `Ничья ${my}:${opp}`);
+      setStatus(my>opp? T('dots_win',{a:my,b:opp}) : my<opp? T('dots_lose',{a:my,b:opp}) : T('dots_draw',{a:my,b:opp}));
       return;
     }
     if(gained===0) turn = who==='A'?'B':'A'; // без завершённой клетки ход переходит
@@ -123,12 +124,13 @@ window.GAME_MODULES.dots = function(ctx){
   }
   function updateStatus(){
     if(over) return;
-    setStatus((turn===youAre?'Твой ход':'Ход соперника') + ` · счёт ${score.A}:${score.B}`);
+    setStatus(T('dots_status',{who: turn===youAre?T('your_turn'):T('opp_turn'), a:score.A, b:score.B}));
   }
 
   draw(); updateStatus();
 
-  return {
+  return { isOver:()=>over,
+
     receiveMove(payload){ if(over) return; applyLine(payload.kind,payload.r,payload.c,turn); }
   };
 };

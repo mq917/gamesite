@@ -1,20 +1,16 @@
 (function(){
 "use strict";
+const T = (key, vars) => window.I18N.t(key, vars);
 
 /* ============ GAMES CATALOG ============ */
-const GAMES = [
-  { id:'chess',      name:'Шахматы',              icon:'♞', desc:'Классика. Ходы подсвечиваются.' },
-  { id:'checkers',   name:'Шашки',                icon:'⛁', desc:'Взятие обязательно, ходы подсвечены.' },
-  { id:'tictactoe',  name:'Крестики-нолики 5×5',  icon:'⌗', desc:'Собери 3 в ряд на большом поле.' },
-  { id:'reversi',    name:'Реверси',              icon:'⬤', desc:'Окружай — и переворачивай фишки.' },
-  { id:'gomoku',     name:'Пять в ряд',           icon:'●', desc:'Собери 5 своих фишек подряд.' },
-  { id:'backgammon', name:'Нарды',                icon:'🎲', desc:'Короткие нарды с броском кубиков.' },
-  { id:'battleship', name:'Морской бой',          icon:'🚢', desc:'Расставь флот и топи корабли врага.' },
-  { id:'dots',       name:'Точки и квадраты',     icon:'▦', desc:'Замыкай квадраты линиями.' },
-  { id:'uno',        name:'Цветные карты',        icon:'🃏', desc:'Сбрось карты быстрее соперника.' },
-  { id:'hangman',    name:'Виселица',             icon:'🙈', desc:'Загадай слово — соперник его отгадывает.' },
-];
-const GAME_BY_ID = Object.fromEntries(GAMES.map(g=>[g.id,g]));
+const GAME_IDS = ['chess','checkers','tictactoe','reversi','gomoku','backgammon','battleship','dots','uno','hangman'];
+const GAME_ICONS = {
+  chess:'♞', checkers:'⛁', tictactoe:'⌗', reversi:'⬤', gomoku:'●',
+  backgammon:'🎲', battleship:'🚢', dots:'▦', uno:'🃏', hangman:'🙈'
+};
+function gameMeta(id){
+  return { id, icon: GAME_ICONS[id], name: T('game_'+id+'_name'), desc: T('game_'+id+'_desc') };
+}
 const EMOJIS = ['😂','🤣','😎','😜','🔥','💪','👍','👎','😱','🥳','🤯','😢','❤️','🎉','🤔','😏','👀','🙌','💀','😴'];
 
 /* ============ STATE ============ */
@@ -35,7 +31,7 @@ const els = {
   setupBackdrop:$('setupBackdrop'), nickInput:$('nickInput'), genderSeg:$('genderSeg'),
   ageInput:$('ageInput'), ageLabel:$('ageLabel'), setupContinue:$('setupContinue'),
   lobby:$('lobby'), gameGrid:$('gameGrid'),
-  onlineCount:$('onlineCount'), themeToggle:$('themeToggle'),
+  onlineCount:$('onlineCount'), themeToggle:$('themeToggle'), langToggle:$('langToggle'),
   waitingBackdrop:$('waitingBackdrop'), waitingTitle:$('waitingTitle'), waitingSub:$('waitingSub'),
   waitingCount:$('waitingCount'), waitingTolerance:$('waitingTolerance'), cancelQueue:$('cancelQueue'),
   proposalBackdrop:$('proposalBackdrop'), oppAvatar:$('oppAvatar'), oppName:$('oppName'), oppMeta:$('oppMeta'),
@@ -43,7 +39,8 @@ const els = {
   room:$('room'), vsYou:$('vsYou'), vsOpp:$('vsOpp'), roomGameName:$('roomGameName'),
   boardWrap:$('boardWrap'), boardStatus:$('boardStatus'), leaveRoom:$('leaveRoom'),
   chatLog:$('chatLog'), chatForm:$('chatForm'), chatInput:$('chatInput'), emojiRow:$('emojiRow'),
-  toast:$('toast'),
+  toast:$('toast'), adSlotBottom:$('adSlotBottom'),
+  finishActions:$('finishActions'), rematchBtn:$('rematchBtn'), backLobbyBtn:$('backLobbyBtn'),
 };
 
 /* ============ TOAST ============ */
@@ -73,6 +70,34 @@ function applyTheme(t){
   });
 })();
 
+/* ============ LANGUAGE ============ */
+function refreshLangButton(){
+  els.langToggle.setAttribute('data-active', window.I18N.getLang());
+}
+(function initLang(){
+  refreshLangButton();
+  els.langToggle.addEventListener('click', ()=>{
+    const next = ({en:'ru',ru:'az',az:'en'})[window.I18N.getLang()] || 'en';
+    window.I18N.setLang(next);
+  });
+  window.I18N.onChange(()=>{
+    refreshLangButton();
+    renderLobby();
+    refreshDynamicTexts();
+  });
+})();
+
+// перерисовывает те тексты, что не покрываются data-i18n (собраны из переменных)
+function refreshDynamicTexts(){
+  if(state.currentQueueGame && !els.waitingBackdrop.hidden){
+    showWaiting(state.currentQueueGame, true);
+  }
+  if(state.room && !els.room.hidden){
+    els.vsYou.textContent = state.me.nick + T('you_suffix');
+    els.roomGameName.textContent = gameMeta(state.room.game).name;
+  }
+}
+
 /* ============ SETUP MODAL ============ */
 let selectedGender = null;
 els.genderSeg.addEventListener('click', (e)=>{
@@ -90,7 +115,7 @@ function checkSetupValid(){
 checkSetupValid();
 
 els.setupContinue.addEventListener('click', ()=>{
-  state.me.nick = els.nickInput.value.trim().slice(0,20) || 'Игрок';
+  state.me.nick = els.nickInput.value.trim().slice(0,20) || 'Player';
   state.me.gender = selectedGender;
   state.me.age = parseInt(els.ageInput.value,10);
   els.setupBackdrop.hidden = true;
@@ -102,14 +127,15 @@ els.setupContinue.addEventListener('click', ()=>{
 const gStats = {};
 function renderLobby(){
   els.gameGrid.innerHTML = '';
-  GAMES.forEach(g=>{
+  GAME_IDS.forEach(id=>{
+    const g = gameMeta(id);
     const card = document.createElement('button');
     card.className = 'game-card';
     card.innerHTML = `
       <div class="g-icon">${g.icon}</div>
       <div class="g-name">${g.name}</div>
       <div class="g-stats">
-        <span><b class="w-${g.id}">${gStats[g.id]||0}</b> ждут</span>
+        <span><b class="w-${g.id}">${gStats[g.id]||0}</b> ${T('stats_waiting')}</span>
       </div>`;
     card.addEventListener('click', ()=>startQueue(g.id));
     els.gameGrid.appendChild(card);
@@ -141,7 +167,7 @@ function connect(){
   });
   ws.addEventListener('close', ()=>{
     state.connected = false;
-    toast('Соединение потеряно. Обновите страницу.');
+    toast(T('connection_lost_toast'));
   });
   ws.addEventListener('message', (ev)=>{
     let msg; try{ msg = JSON.parse(ev.data); }catch(e){ return; }
@@ -162,11 +188,10 @@ function handleServerMessage(msg){
       break;
     }
     case 'match_declined': {
-      // вернулись в очередь автоматически (сервер уже держит нас там же)
       els.proposalBackdrop.hidden = true;
       if(state.currentQueueGame){
         showWaiting(state.currentQueueGame);
-        toast('Соперник отказался, ищем дальше…');
+        toast(T('opponent_declined_toast'));
       }
       break;
     }
@@ -182,10 +207,19 @@ function handleServerMessage(msg){
       addChatMsg('them', msg.text);
       break;
     }
+    case 'rematch_waiting': {
+      toast(T('rematch_opponent'));
+      break;
+    }
+    case 'rematch_start': {
+      rematchRequested=false;
+      restartCurrentGame();
+      break;
+    }
     case 'opponent_left': {
-      addChatMsg('sys', 'Соперник покинул игру.');
-      els.boardStatus.textContent = 'Соперник вышел из игры.';
-      toast('Соперник покинул игру');
+      addChatMsg('sys', T('opponent_left_chat'));
+      els.boardStatus.textContent = T('opponent_left_status');
+      toast(T('opponent_left_toast'));
       break;
     }
   }
@@ -198,11 +232,11 @@ function startQueue(gameId){
   send({ type:'queue', game: gameId });
   showWaiting(gameId);
 }
-function showWaiting(gameId){
-  const g = GAME_BY_ID[gameId];
+function showWaiting(gameId, keepTitle){
+  const g = gameMeta(gameId);
   els.waitingBackdrop.hidden = false;
-  els.waitingTitle.textContent = 'Ищем соперника…';
-  els.waitingSub.textContent = 'Игра: ' + g.name;
+  if(!keepTitle) els.waitingTitle.textContent = T('waiting_title');
+  els.waitingSub.textContent = T('waiting_sub', { game:g.name });
   els.waitingCount.textContent = gStats[gameId] || 0;
   clearInterval(waitingTimerInterval);
   updateTolerance();
@@ -221,18 +255,20 @@ els.cancelQueue.addEventListener('click', ()=>{
 });
 
 /* ============ PROPOSAL ============ */
-function genderWord(g){ return g==='m' ? 'М' : g==='f' ? 'Ж' : '—'; }
+function genderWord(g){ return g==='m' ? T('gender_short_m') : g==='f' ? T('gender_short_f') : T('gender_short_o'); }
+let lastProposalOpponent = null;
 function showProposal(opp){
+  lastProposalOpponent = opp;
   els.waitingBackdrop.hidden = true;
   els.proposalBackdrop.hidden = false;
   els.oppAvatar.textContent = (opp.nick||'?').slice(0,1).toUpperCase();
   els.oppName.textContent = opp.nick;
-  els.oppMeta.textContent = `${genderWord(opp.gender)} · ${opp.age} лет`;
+  els.oppMeta.textContent = `${genderWord(opp.gender)} · ${T('years_old',{age:opp.age})}`;
 }
 els.acceptMatch.addEventListener('click', ()=>{
   send({ type:'match_response', accept:true });
   els.proposalBackdrop.hidden = true;
-  els.waitingTitle.textContent = 'Ждём подтверждения соперника…';
+  els.waitingTitle.textContent = T('waiting_title_confirm');
   els.waitingBackdrop.hidden = false;
 });
 els.declineMatch.addEventListener('click', ()=>{
@@ -241,9 +277,65 @@ els.declineMatch.addEventListener('click', ()=>{
   showWaiting(state.currentQueueGame);
 });
 
+
+/* ============ FINISH / REMATCH ============ */
+let finishPoll=null;
+let rematchRequested=false;
+
+function showFinishActions(){
+  if(!state.room) return;
+  els.finishActions.hidden = false;
+  if(rematchRequested){
+    els.rematchBtn.disabled = true;
+    els.rematchBtn.textContent = T('rematch_waiting');
+  } else {
+    els.rematchBtn.disabled = false;
+    els.rematchBtn.textContent = T('rematch');
+  }
+}
+function hideFinishActions(){
+  els.finishActions.hidden = true;
+  els.rematchBtn.disabled = false;
+  rematchRequested=false;
+  els.rematchBtn.textContent = T('rematch');
+}
+function pollGameFinished(){
+  if(!state.room || !state.gameHandle) return;
+  if(typeof state.gameHandle.isOver === 'function' && state.gameHandle.isOver()) showFinishActions();
+}
+function restartCurrentGame(){
+  if(!state.room) return;
+  hideFinishActions();
+  els.boardWrap.innerHTML='';
+  els.boardStatus.textContent=T('rematch_starting');
+  const {game,youAre,opponent}=state.room;
+  const factory=window.GAME_MODULES && window.GAME_MODULES[game];
+  if(factory){
+    state.gameHandle=factory({
+      container:els.boardWrap, youAre,
+      sendMove:(payload)=>send({type:'game_move',payload}),
+      setStatus:(text)=>{ els.boardStatus.textContent=text; },
+      onGameOver:showFinishActions
+    });
+  }
+}
+els.rematchBtn.addEventListener('click',()=>{
+  if(!state.room || rematchRequested) return;
+  rematchRequested=true;
+  els.rematchBtn.disabled=true;
+  els.rematchBtn.textContent=T('rematch_waiting');
+  send({type:'rematch_request'});
+});
+els.backLobbyBtn.addEventListener('click',()=>{
+  if(state.room) send({type:'leave_room'});
+  backToLobby();
+});
+
 /* ============ ROOM ============ */
 function enterRoom(gameId, youAre, opponent){
   clearInterval(waitingTimerInterval);
+  clearInterval(finishPoll);
+  hideFinishActions();
   els.waitingBackdrop.hidden = true;
   els.proposalBackdrop.hidden = true;
   state.currentQueueGame = null;
@@ -252,13 +344,14 @@ function enterRoom(gameId, youAre, opponent){
 
   els.lobby.hidden = true;
   els.room.hidden = false;
-  els.vsYou.textContent = state.me.nick + ' (ты)';
+  els.adSlotBottom.hidden = true;
+  els.vsYou.textContent = state.me.nick + T('you_suffix');
   els.vsOpp.textContent = opponent.nick;
-  els.roomGameName.textContent = GAME_BY_ID[gameId].name;
+  els.roomGameName.textContent = gameMeta(gameId).name;
   els.boardWrap.innerHTML = '';
   els.boardStatus.textContent = '';
   els.chatLog.innerHTML = '';
-  addChatMsg('sys', 'Соперник найден: ' + opponent.nick + '. Удачи!');
+  addChatMsg('sys', T('opponent_found_chat', { name:opponent.nick }));
 
   renderEmojiRow();
 
@@ -269,10 +362,12 @@ function enterRoom(gameId, youAre, opponent){
       youAre,
       sendMove: (payload)=>send({ type:'game_move', payload }),
       setStatus: (text)=>{ els.boardStatus.textContent = text; },
+      onGameOver: showFinishActions
     });
   } else {
-    els.boardWrap.textContent = 'Эта игра ещё готовится.';
+    els.boardWrap.textContent = 'This game is still being prepared.';
   }
+  finishPoll = setInterval(pollGameFinished, 250);
 }
 
 els.leaveRoom.addEventListener('click', ()=>{
@@ -280,10 +375,13 @@ els.leaveRoom.addEventListener('click', ()=>{
   backToLobby();
 });
 function backToLobby(){
+  clearInterval(finishPoll);
+  hideFinishActions();
   state.room = null;
   state.gameHandle = null;
   els.room.hidden = true;
   els.lobby.hidden = false;
+  els.adSlotBottom.hidden = false;
 }
 
 /* ============ CHAT ============ */
@@ -310,7 +408,6 @@ els.chatForm.addEventListener('submit', (e)=>{
   e.preventDefault();
   const text = els.chatInput.value.trim();
   if(!text) return;
-  // только буквы/цифры/эмодзи/пунктуация — вырезаем ссылки на клиенте тоже
   const cleaned = text.replace(/https?:\/\/\S+/gi,'').replace(/\b\S+\.(com|ru|net|org|io|me|рф)\S*/gi,'').trim();
   if(!cleaned) return;
   send({ type:'chat', text:cleaned });
