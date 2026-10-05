@@ -137,10 +137,17 @@ window.GAME_MODULES.battleship = function(ctx){
     return {occ,cells};
   }
 
-  setupBtn.addEventListener('click', ()=>{
+  // Корабли создаются сразу, поэтому игрок всегда видит собственный флот.
+  // Кнопка отдельно подтверждает готовность и не меняет уже показанную расстановку.
+  {
     const placement = autoPlace();
     myShips = placement.occ;
     myShipCells = placement.cells;
+    renderMyBoard();
+  }
+
+  setupBtn.addEventListener('click', ()=>{
+    if(ready) return;
     ready = true;
     renderMyBoard();
     setupBtn.disabled = true;
@@ -184,7 +191,8 @@ window.GAME_MODULES.battleship = function(ctx){
     if(!started||over||turn!==youAre) return;
     const k=key(r,c);
     if(myShots.has(k)) return;
-    myShots.delete(k);
+    myShots.set(k, 'pending');
+    renderOppBoard();
     sendMove({ type:'shot', r, c });
     setStatus(T('bs_waiting_result'));
   }

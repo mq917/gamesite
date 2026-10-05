@@ -16,7 +16,7 @@
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-const { WebSocketServer } = require('ws');
+const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = process.env.PORT || 3000;
 
@@ -90,7 +90,7 @@ function ageToleranceFor(session) {
 }
 
 function safeSend(ws, obj) {
-  if (ws.readyState === ws.OPEN) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
     try { ws.send(JSON.stringify(obj)); } catch (e) { /* ignore */ }
   }
 }
