@@ -24,6 +24,8 @@ const state = {
   room:null,           // { game, youAre, opponent, opponentLeft }
   gameHandle:null,     // {receiveMove, isOver}
   chatHistory:[],
+  resumeToken: sessionStorage.getItem('arena_resume_token') || '',
+  roomSeq: 0,
 };
 
 /* ============ DOM SHORTCUTS ============ */
@@ -150,6 +152,10 @@ function renderLobby(){
 }
 renderLobby();
 
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible' && (!state.ws || state.ws.readyState === WebSocket.CLOSED)) connect();
+});
+
 let onlineNow = 0;
 function updateStatsUI(stats){
   onlineNow = stats.online;
@@ -164,34 +170,157 @@ function updateStatsUI(stats){
 }
 
 /* ============ WEBSOCKET ============ */
+const WS_RECONNECT_BASE_MS = 1000;
+const WS_RECONNECT_MAX_MS = 10000;
+const WS_HEARTBEAT_MS = 15000;
+const WS_WATCHDOG_MS = 45000;
+let reconnectTimer = null;
+let reconnectAttempt = 0;
+let heartbeatTimer = null;
+let watchdogTimer = null;
+let lastSocketActivity = 0;
+let hadConnectionBefore = false;
+let reconnectToastShown = false;
+
 function wsUrl(){
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return proto + '//' + location.host;
 }
+
+function persistResumeState(){
+  try{
+    if(state.resumeToken) sessionStorage.setItem('arena_resume_token', state.resumeToken);
+  }catch(e){}
+}
+
+function stopSocketTimers(){
+  clearInterval(heartbeatTimer);
+  clearInterval(watchdogTimer);
+  heartbeatTimer = null;
+  watchdogTimer = null;
+}
+
+function startSocketTimers(ws){
+  stopSocketTimers();
+  heartbeatTimer = setInterval(()=>{
+    if(state.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+    send({type:'heartbeat', t:Date.now()});
+  }, WS_HEARTBEAT_MS);
+  watchdogTimer = setInterval(()=>{
+    if(state.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+    if(Date.now() - lastSocketActivity > WS_WATCHDOG_MS){
+      try{ ws.close(); }catch(e){}
+    }
+  }, 5000);
+}
+
+function scheduleReconnect(){
+  if(reconnectTimer) return;
+  const delay = Math.min(WS_RECONNECT_MAX_MS, WS_RECONNECT_BASE_MS * Math.pow(2, Math.min(reconnectAttempt, 4)));
+  reconnectAttempt++;
+  reconnectTimer = setTimeout(()=>{
+    reconnectTimer = null;
+    connect();
+  }, delay);
+}
+
 function connect(){
-  const ws = new WebSocket(wsUrl());
+  if(state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) return;
+  let ws;
+  try{ ws = new WebSocket(wsUrl()); }catch(e){ scheduleReconnect(); return; }
   state.ws = ws;
+
   ws.addEventListener('open', ()=>{
+    if(state.ws !== ws) return;
     state.connected = true;
-    send({ type:'hello', nick:state.me.nick, gender:state.me.gender, age:state.me.age });
+    hadConnectionBefore = true;
+    reconnectAttempt = 0;
+    reconnectToastShown = false;
+    lastSocketActivity = Date.now();
+    startSocketTimers(ws);
+    send({
+      type:'hello',
+      nick:state.me.nick,
+      gender:state.me.gender,
+      age:state.me.age,
+      resumeToken:state.resumeToken || '',
+      lastRoomSeq:state.roomSeq || 0,
+    });
   });
+
   ws.addEventListener('close', ()=>{
+    stopSocketTimers();
+    if(state.ws !== ws) return;
+    state.ws = null;
     state.connected = false;
-    toast(T('connection_lost_toast'));
+    if(hadConnectionBefore && !reconnectToastShown){
+      toast(T('connection_lost_toast'));
+      reconnectToastShown = true;
+    }
+    scheduleReconnect();
   });
+
+  ws.addEventListener('error', ()=>{
+    // close последует автоматически, отдельный error не показываем, чтобы не спамить UI.
+  });
+
   ws.addEventListener('message', (ev)=>{
+    if(state.ws !== ws) return;
+    lastSocketActivity = Date.now();
     let msg; try{ msg = JSON.parse(ev.data); }catch(e){ return; }
     handleServerMessage(msg);
   });
 }
+
 function send(obj){
-  if(state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(obj));
+  if(state.ws && state.ws.readyState === WebSocket.OPEN){
+    try{ state.ws.send(JSON.stringify(obj)); return true; }catch(e){}
+  }
+  return false;
 }
 
 let waitingTimerInterval=null;
 function handleServerMessage(msg){
   switch(msg.type){
-    case 'hello_ok': state.myId = msg.id; break;
+    case 'hello_ok':
+      state.myId = msg.id;
+      if(msg.resumeToken){ state.resumeToken = msg.resumeToken; persistResumeState(); }
+      if(msg.resumed && state.room && !els.room.hidden){
+        toast(T('connection_restored_toast'));
+      }
+      break;
+    case 'heartbeat_ack': break;
+    case 'queue_resumed':
+      state.currentQueueGame = msg.game || state.currentQueueGame;
+      if(state.currentQueueGame && !state.room){ showWaiting(state.currentQueueGame); }
+      break;
+    case 'room_resumed': {
+      const sameRoom = state.room && state.room.game === msg.game && !els.room.hidden;
+      if(!sameRoom){
+        enterRoom(msg.game, msg.youAre, msg.opponent, msg.round);
+      }else if(msg.round && state.room.round !== msg.round){
+        state.room.round = msg.round;
+        state.roomSeq = 0;
+        restartCurrentGame();
+      }
+      break;
+    }
+    case 'opponent_disconnected':
+      if(state.room){
+        state.room.opponentDisconnected = true;
+        addChatMsg('sys', T('opponent_connection_lost'));
+      }
+      break;
+    case 'opponent_reconnected':
+      if(state.room){
+        state.room.opponentDisconnected = false;
+        addChatMsg('sys', T('opponent_connection_restored'));
+        toast(T('connection_restored_toast'));
+      }
+      break;
+    case 'server_error':
+      toast(T('server_error_toast'));
+      break;
     case 'stats': updateStatsUI(msg); break;
 
     case 'global_history': {
@@ -222,11 +351,18 @@ function handleServerMessage(msg){
       break;
     }
     case 'opponent_move': {
+      if(msg.round && state.room && state.room.round !== msg.round){
+        state.room.round = msg.round;
+        state.roomSeq = 0;
+        restartCurrentGame();
+      }
       if(state.gameHandle && state.gameHandle.receiveMove) state.gameHandle.receiveMove(msg.payload);
+      if(Number.isFinite(Number(msg.seq))) state.roomSeq = Math.max(state.roomSeq || 0, Number(msg.seq));
       break;
     }
     case 'opponent_chat': {
       addChatMsg('them', msg.text);
+      if(Number.isFinite(Number(msg.seq))) state.roomSeq = Math.max(state.roomSeq || 0, Number(msg.seq));
       break;
     }
     case 'rematch_waiting': {
@@ -238,6 +374,8 @@ function handleServerMessage(msg){
       rematchRequested=false;
       // в реванше стороны меняются: кто ходил первым, теперь ходит вторым
       state.room.youAre = state.room.youAre==='A' ? 'B' : 'A';
+      state.room.round = msg.round || ((state.room.round || 1) + 1);
+      state.roomSeq = 0;
       addChatMsg('sys', T('rematch_swapped'));
       restartCurrentGame();
       break;
@@ -368,14 +506,15 @@ els.backLobbyBtn.addEventListener('click',()=>{
 });
 
 /* ============ ROOM ============ */
-function enterRoom(gameId, youAre, opponent){
+function enterRoom(gameId, youAre, opponent, round){
   clearInterval(waitingTimerInterval);
   clearInterval(finishPoll);
   hideFinishActions();
   els.waitingBackdrop.hidden = true;
   els.proposalBackdrop.hidden = true;
   state.currentQueueGame = null;
-  state.room = { game:gameId, youAre, opponent, opponentLeft:false };
+  state.room = { game:gameId, youAre, opponent, opponentLeft:false, opponentDisconnected:false, round:round || 1 };
+  state.roomSeq = 0;
   state.chatHistory = [];
 
   els.lobby.hidden = true;
