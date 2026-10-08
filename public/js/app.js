@@ -25,7 +25,8 @@ const state = {
   gameHandle:null,     // {receiveMove, isOver}
   chatHistory:[],
   resumeToken: sessionStorage.getItem('arena_resume_token') || '',
-  roomSeq: 0,
+  roomCursor: 0,
+  roomEventBuffer: new Map(),
 };
 
 /* ============ DOM SHORTCUTS ============ */
@@ -130,6 +131,7 @@ els.setupContinue.addEventListener('click', ()=>{
   els.lobby.hidden = false;
   els.gchatFab.hidden = false;
   connect();
+  startControlSync();
 });
 
 /* ============ LOBBY RENDER ============ */
@@ -153,7 +155,10 @@ function renderLobby(){
 renderLobby();
 
 document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState === 'visible' && (!state.ws || state.ws.readyState === WebSocket.CLOSED)) connect();
+  if(document.visibilityState === 'visible'){
+    if(!state.ws || state.ws.readyState === WebSocket.CLOSED) connect();
+    runControlSync();
+  }
 });
 
 let onlineNow = 0;
@@ -178,6 +183,8 @@ let reconnectTimer = null;
 let reconnectAttempt = 0;
 let heartbeatTimer = null;
 let watchdogTimer = null;
+let syncTimer = null;
+let syncInFlight = false;
 let lastSocketActivity = 0;
 let hadConnectionBefore = false;
 let reconnectToastShown = false;
@@ -244,7 +251,7 @@ function connect(){
       gender:state.me.gender,
       age:state.me.age,
       resumeToken:state.resumeToken || '',
-      lastRoomSeq:state.roomSeq || 0,
+      lastRoomCursor:state.roomCursor || 0,
     });
   });
 
@@ -280,11 +287,115 @@ function send(obj){
 }
 
 let waitingTimerInterval=null;
+const ROOM_SYNC_INTERVAL_MS = 3000;
+const ROOM_SYNC_TIMEOUT_MS = 2500;
+
+function resetRoomEventCursor(){
+  state.roomCursor = 0;
+  state.roomEventBuffer.clear();
+}
+
+function acceptRoomEvent(msg){
+  if(!state.room || !msg || msg.round !== state.room.round) return;
+  const cursor = Number(msg.recipientSeq);
+  if(!Number.isFinite(cursor) || cursor <= state.roomCursor) return;
+  state.roomEventBuffer.set(cursor, msg);
+  flushRoomEventBuffer();
+}
+
+function flushRoomEventBuffer(){
+  if(!state.room) return;
+  while(state.roomEventBuffer.has(state.roomCursor + 1)){
+    const nextCursor = state.roomCursor + 1;
+    const msg = state.roomEventBuffer.get(nextCursor);
+    state.roomEventBuffer.delete(nextCursor);
+    applyRoomEvent(msg);
+    state.roomCursor = nextCursor;
+  }
+}
+
+function applyRoomEvent(msg){
+  switch(msg.type){
+    case 'opponent_move':
+      if(state.gameHandle && state.gameHandle.receiveMove) state.gameHandle.receiveMove(msg.payload);
+      break;
+    case 'opponent_chat':
+      addChatMsg('them', msg.text, msg.senderNick || (state.room?.opponent?.nick || ''));
+      break;
+  }
+}
+
+function updateRoomFromSync(roomInfo){
+  if(!roomInfo) return;
+  if(!state.room || els.room.hidden || state.room.game !== roomInfo.game){
+    enterRoom(roomInfo.game, roomInfo.youAre, roomInfo.opponent, roomInfo.round);
+  }else if(roomInfo.round && state.room.round !== roomInfo.round){
+    state.room.youAre = roomInfo.youAre || state.room.youAre;
+    state.room.opponent = roomInfo.opponent || state.room.opponent;
+    state.room.round = roomInfo.round;
+    resetRoomEventCursor();
+    restartCurrentGame();
+  }
+  if(state.room){
+    const wasDisconnected = !!state.room.opponentDisconnected;
+    const isDisconnected = roomInfo.opponentConnected === false;
+    state.room.opponentDisconnected = isDisconnected;
+    if(wasDisconnected && !isDisconnected) addChatMsg('sys', T('opponent_connection_restored'));
+    if(!wasDisconnected && isDisconnected) addChatMsg('sys', T('opponent_connection_lost'));
+  }
+}
+
+async function runControlSync(){
+  if(syncInFlight || !state.resumeToken) return;
+  syncInFlight = true;
+  const controller = new AbortController();
+  const timeout = setTimeout(()=>controller.abort(), ROOM_SYNC_TIMEOUT_MS);
+  try{
+    const res = await fetch('/api/sync', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      cache:'no-store',
+      body:JSON.stringify({
+        resumeToken:state.resumeToken,
+        lastRoomCursor:state.roomCursor || 0,
+      }),
+      signal:controller.signal,
+    });
+    if(!res.ok) return;
+    const data = await res.json();
+    if(!data || data.ok === false) return;
+
+    if(data.room){
+      updateRoomFromSync(data.room);
+      (data.events || []).forEach(acceptRoomEvent);
+      flushRoomEventBuffer();
+    }else if(state.currentQueueGame && data.queueGame === state.currentQueueGame && !state.room){
+      if(data.pendingOpponent && els.proposalBackdrop.hidden) showProposal(data.pendingOpponent);
+    }
+  }catch(e){
+    // Контрольный канал best-effort; основной WebSocket продолжает reconnect.
+  }finally{
+    clearTimeout(timeout);
+    syncInFlight = false;
+  }
+}
+
+function startControlSync(){
+  clearInterval(syncTimer);
+  syncTimer = setInterval(runControlSync, ROOM_SYNC_INTERVAL_MS);
+  runControlSync();
+}
+
+function stopControlSync(){
+  clearInterval(syncTimer);
+  syncTimer = null;
+}
+
 function handleServerMessage(msg){
   switch(msg.type){
     case 'hello_ok':
       state.myId = msg.id;
-      if(msg.resumeToken){ state.resumeToken = msg.resumeToken; persistResumeState(); }
+      if(msg.resumeToken){ state.resumeToken = msg.resumeToken; persistResumeState(); runControlSync(); }
       if(msg.resumed && state.room && !els.room.hidden){
         toast(T('connection_restored_toast'));
       }
@@ -299,9 +410,14 @@ function handleServerMessage(msg){
       if(!sameRoom){
         enterRoom(msg.game, msg.youAre, msg.opponent, msg.round);
       }else if(msg.round && state.room.round !== msg.round){
+        state.room.youAre = msg.youAre || state.room.youAre;
+        state.room.opponent = msg.opponent || state.room.opponent;
         state.room.round = msg.round;
-        state.roomSeq = 0;
+        state.room.opponentDisconnected = msg.opponentConnected === false;
+        resetRoomEventCursor();
         restartCurrentGame();
+      }else if(state.room){
+        state.room.opponentDisconnected = msg.opponentConnected === false;
       }
       break;
     }
@@ -350,21 +466,10 @@ function handleServerMessage(msg){
       enterRoom(msg.game, msg.youAre, msg.opponent);
       break;
     }
-    case 'opponent_move': {
-      if(msg.round && state.room && state.room.round !== msg.round){
-        state.room.round = msg.round;
-        state.roomSeq = 0;
-        restartCurrentGame();
-      }
-      if(state.gameHandle && state.gameHandle.receiveMove) state.gameHandle.receiveMove(msg.payload);
-      if(Number.isFinite(Number(msg.seq))) state.roomSeq = Math.max(state.roomSeq || 0, Number(msg.seq));
+    case 'opponent_move':
+    case 'opponent_chat':
+      acceptRoomEvent(msg);
       break;
-    }
-    case 'opponent_chat': {
-      addChatMsg('them', msg.text);
-      if(Number.isFinite(Number(msg.seq))) state.roomSeq = Math.max(state.roomSeq || 0, Number(msg.seq));
-      break;
-    }
     case 'rematch_waiting': {
       toast(T('rematch_opponent'));
       break;
@@ -375,7 +480,7 @@ function handleServerMessage(msg){
       // в реванше стороны меняются: кто ходил первым, теперь ходит вторым
       state.room.youAre = state.room.youAre==='A' ? 'B' : 'A';
       state.room.round = msg.round || ((state.room.round || 1) + 1);
-      state.roomSeq = 0;
+      resetRoomEventCursor();
       addChatMsg('sys', T('rematch_swapped'));
       restartCurrentGame();
       break;
@@ -514,7 +619,7 @@ function enterRoom(gameId, youAre, opponent, round){
   els.proposalBackdrop.hidden = true;
   state.currentQueueGame = null;
   state.room = { game:gameId, youAre, opponent, opponentLeft:false, opponentDisconnected:false, round:round || 1 };
-  state.roomSeq = 0;
+  resetRoomEventCursor();
   state.chatHistory = [];
 
   els.lobby.hidden = true;
@@ -560,10 +665,21 @@ function renderEmojiRow(row, list, input){
     row.appendChild(b);
   });
 }
-function addChatMsg(kind, text){
+function addChatMsg(kind, text, senderName){
   const div = document.createElement('div');
   div.className = 'chat-msg ' + kind;
-  div.textContent = text;
+  if(kind === 'sys'){
+    div.textContent = text;
+  }else{
+    const sender = document.createElement('b');
+    sender.className = 'chat-sender';
+    sender.textContent = senderName || (kind === 'me' ? state.me.nick : (state.room?.opponent?.nick || ''));
+    const body = document.createElement('span');
+    body.className = 'chat-text';
+    body.textContent = text;
+    div.appendChild(sender);
+    div.appendChild(body);
+  }
   els.chatLog.appendChild(div);
   els.chatLog.scrollTop = els.chatLog.scrollHeight;
 }
@@ -574,7 +690,7 @@ els.chatForm.addEventListener('submit', (e)=>{
   const cleaned = text.replace(/https?:\/\/\S+/gi,'').replace(/\b\S+\.(com|ru|net|org|io|me|рф)\S*/gi,'').trim();
   if(!cleaned) return;
   send({ type:'chat', text:cleaned });
-  addChatMsg('me', cleaned);
+  addChatMsg('me', cleaned, state.me.nick);
   els.chatInput.value = '';
 });
 

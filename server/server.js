@@ -24,8 +24,9 @@ const PORT = process.env.PORT || 3000;
 // WebSocket reliability: transport heartbeat + resumable sessions.
 const HEARTBEAT_INTERVAL_MS = 15000;
 const RESUME_GRACE_MS = 45000;
-const ROOM_EVENT_LIMIT = 2000;
+const ROOM_EVENT_LIMIT = 5000;
 const MAX_WS_PAYLOAD = 64 * 1024;
+const HTTP_SYNC_MAX_BODY = 32 * 1024;
 
 const GAMES = [
   { id: 'chess', name: 'Шахматы' },
@@ -39,9 +40,51 @@ const GAME_IDS = new Set(GAMES.map(g => g.id));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
+function writeJson(res, status, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
+    'Pragma': 'no-cache',
+    'Content-Length': Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
 const server = http.createServer((req, res) => {
   let reqPath;
   try { reqPath = decodeURIComponent(req.url.split('?')[0]); } catch (e) { res.writeHead(400); return res.end(); }
+
+  // Control-plane sync. This intentionally lives outside WebSocket so a flaky
+  // WebSocket connection does not prevent the browser from checking the
+  // opponent/game state every few seconds.
+  if (req.method === 'POST' && reqPath === '/api/sync') {
+    let size = 0;
+    let body = '';
+    let tooLarge = false;
+    req.setEncoding('utf8');
+    req.on('data', chunk => {
+      size += Buffer.byteLength(chunk);
+      if (size > HTTP_SYNC_MAX_BODY) { tooLarge = true; return; }
+      body += chunk;
+    });
+    req.on('end', () => {
+      try {
+        if (tooLarge) return writeJson(res, 413, { ok: false, error: 'payload_too_large' });
+        const input = JSON.parse(body || '{}');
+        const token = typeof input.resumeToken === 'string' ? input.resumeToken : '';
+        const session = sessionsByResumeToken.get(token);
+        if (!session || !session.ready) return writeJson(res, 401, { ok: false, error: 'session_not_found' });
+        const payload = buildSyncPayload(session, Number(input.lastRoomCursor));
+        return writeJson(res, 200, payload);
+      } catch (err) {
+        console.error('HTTP sync error:', err);
+        return writeJson(res, 500, { ok: false, error: 'sync_failed' });
+      }
+    });
+    return;
+  }
+
   if (reqPath === '/') reqPath = '/index.html';
   const filePath = path.join(PUBLIC_DIR, reqPath);
   if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end(); }
@@ -61,7 +104,7 @@ const clients = new Map(); // только реально подключённы
 const sessionsByResumeToken = new Map(); // token -> session во время grace-window
 const queues = new Map();  // gameId -> Set(session)
 GAMES.forEach(g => queues.set(g.id, new Set()));
-const rooms = new Map();   // roomId -> {a, b, game, rematch, round, seq, events}
+const rooms = new Map();   // roomId -> {a, b, game, rematch, round, seq, events, recipientSeq}
 let nextRoomId = 1;
 
 // ---- общий чат ----
@@ -133,24 +176,78 @@ function createResumeToken() {
 }
 
 function rememberRoomEvent(room, recipient, type, payload) {
-  const event = { seq: ++room.seq, round: room.round, recipientId: recipient.id, type, payload };
+  room.seq += 1;
+  const recipientSeq = (room.recipientSeq.get(recipient.id) || 0) + 1;
+  room.recipientSeq.set(recipient.id, recipientSeq);
+  const event = {
+    seq: room.seq,
+    recipientSeq,
+    round: room.round,
+    recipientId: recipient.id,
+    type,
+    payload,
+    ts: Date.now(),
+  };
   room.events.push(event);
   if (room.events.length > ROOM_EVENT_LIMIT) {
     room.events.splice(0, room.events.length - ROOM_EVENT_LIMIT);
   }
-  if (isConnected(recipient)) {
-    safeSend(recipient.ws, { type, ...payload, seq: event.seq, round: event.round });
-  }
+  const outgoing = { type, ...payload, seq: event.seq, recipientSeq, round: event.round };
+  if (isConnected(recipient)) safeSend(recipient.ws, outgoing);
 }
 
-function replayRoomEvents(room, session, afterSeq) {
-  const minSeq = Number.isFinite(afterSeq) ? afterSeq : 0;
-  for (const event of room.events) {
-    if (event.round !== room.round || event.recipientId !== session.id || event.seq <= minSeq) continue;
-    if (isConnected(session)) {
-      safeSend(session.ws, { type: event.type, ...event.payload, seq: event.seq, round: event.round });
-    }
+function roomEventsFor(room, session, afterRecipientSeq) {
+  const cursor = Number.isFinite(afterRecipientSeq) && afterRecipientSeq >= 0 ? afterRecipientSeq : 0;
+  return room.events
+    .filter(e => e.round === room.round && e.recipientId === session.id && e.recipientSeq > cursor)
+    .map(e => ({ type: e.type, ...e.payload, seq: e.seq, recipientSeq: e.recipientSeq, round: e.round }));
+}
+
+function replayRoomEvents(room, session, afterRecipientSeq) {
+  const events = roomEventsFor(room, session, afterRecipientSeq);
+  if (!isConnected(session)) return;
+  for (const event of events) safeSend(session.ws, event);
+}
+
+function publicRoomState(room, session) {
+  const opponent = room.a === session ? room.b : room.a;
+  return {
+    roomId: session.room,
+    game: room.game,
+    round: room.round,
+    youAre: room.a === session ? 'A' : 'B',
+    opponent: publicProfile(opponent),
+    opponentConnected: isConnected(opponent),
+    latestSeq: room.seq,
+    latestRecipientSeq: room.recipientSeq.get(session.id) || 0,
+  };
+}
+
+function buildSyncPayload(session, afterRecipientSeq) {
+  if (session.room) {
+    const room = rooms.get(session.room);
+    if (!room) return { ok: true, room: null, queueGame: session.game || null };
+    const roomState = publicRoomState(room, session);
+    return {
+      ok: true,
+      serverTime: Date.now(),
+      room: roomState,
+      events: roomEventsFor(room, session, afterRecipientSeq),
+    };
   }
+
+  return {
+    ok: true,
+    serverTime: Date.now(),
+    room: null,
+    queueGame: session.game || null,
+    pendingOpponent: session.pendingProposal && session.game
+      ? (() => {
+          const opp = findSessionById(session.game, session.pendingProposal);
+          return opp ? publicProfile(opp) : null;
+        })()
+      : null,
+  };
 }
 
 function publicProfile(session) {
@@ -219,7 +316,16 @@ function makeRoom(gameId, a, b) {
   queues.get(gameId).delete(b);
   a.room = roomId; b.room = roomId;
   a.pendingProposal = null; b.pendingProposal = null;
-  rooms.set(roomId, { game: gameId, a, b, rematch: new Set(), round: 1, seq: 0, events: [] });
+  rooms.set(roomId, {
+    game: gameId,
+    a,
+    b,
+    rematch: new Set(),
+    round: 1,
+    seq: 0,
+    events: [],
+    recipientSeq: new Map([[a.id, 0], [b.id, 0]]),
+  });
   safeSend(a.ws, { type: 'match_confirmed', opponent: publicProfile(b), youAre: 'A', game: gameId });
   safeSend(b.ws, { type: 'match_confirmed', opponent: publicProfile(a), youAre: 'B', game: gameId });
 }
@@ -392,10 +498,11 @@ wss.on('connection', (ws) => {
                   youAre: room.a === session ? 'A' : 'B',
                   opponent: publicProfile(opp),
                   round: room.round,
+                  opponentConnected: isConnected(opp),
                 });
                 if (opp && isConnected(opp)) safeSend(opp.ws, { type: 'opponent_reconnected' });
-                const lastSeq = Number.isFinite(Number(msg.lastRoomSeq)) ? Number(msg.lastRoomSeq) : 0;
-                replayRoomEvents(room, session, lastSeq);
+                const lastCursor = Number.isFinite(Number(msg.lastRoomCursor)) ? Number(msg.lastRoomCursor) : 0;
+                replayRoomEvents(room, session, lastCursor);
               }
             } else if (session.game) {
               safeSend(ws, { type: 'queue_resumed', game: session.game });
@@ -469,15 +576,25 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'sync': {
+        if (!session.ready) return;
+        safeSend(ws, buildSyncPayload(session, Number(msg.lastRoomCursor)));
+        break;
+      }
+
       case 'game_move': {
         const room = session.room && rooms.get(session.room);
         if (!room || !room.a || !room.b) return;
         const opp = room.a === session ? room.b : room.a;
-        rememberRoomEvent(room, opp, 'opponent_move', { payload: msg.payload });
+        rememberRoomEvent(room, opp, 'opponent_move', {
+          payload: msg.payload,
+          senderId: session.id,
+          senderNick: session.nick,
+        });
         break;
       }
 
-      case 'chat': { // личный чат в комнате
+      case 'chat': { // личный чат: только сопернику в этой же комнате
         const room = session.room && rooms.get(session.room);
         if (!room || !room.a || !room.b) return;
         let text = String(msg.text || '').slice(0, 300);
@@ -485,7 +602,11 @@ wss.on('connection', (ws) => {
         text = text.trim();
         if (!text) return;
         const opp = room.a === session ? room.b : room.a;
-        rememberRoomEvent(room, opp, 'opponent_chat', { text });
+        rememberRoomEvent(room, opp, 'opponent_chat', {
+          text,
+          senderId: session.id,
+          senderNick: session.nick,
+        });
         break;
       }
 
@@ -521,6 +642,8 @@ wss.on('connection', (ws) => {
           room.round += 1;
           room.seq = 0;
           room.events = [];
+          room.recipientSeq.set(room.a.id, 0);
+          room.recipientSeq.set(room.b.id, 0);
           safeSend(room.a.ws, { type: 'rematch_start', round: room.round });
           safeSend(room.b.ws, { type: 'rematch_start', round: room.round });
         } else if (opp) {
