@@ -275,3 +275,69 @@ input{font-family:inherit;}
 /* generic chess/checkers/board grid helpers used by game modules */
 .sq{display:flex; align-items:center; justify-content:center; user-select:none;}
 .board-grid{display:grid;}
+
+/* ============ HIDDEN FIX ============ */
+/* Без этого display:flex/grid у .room, .finish-actions, .ad-slot перебивал атрибут hidden. */
+[hidden]{display:none !important;}
+
+/* ============ GLOBAL CHAT ============ */
+:root{ --nick-m:#12776B; --nick-f:#D9502F; --nick-o:#6b6f7f; }
+:root[data-theme="dark"]{ --nick-m:#3CCBB9; --nick-f:#FF8A6E; --nick-o:#9498ab; }
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --nick-m:#3CCBB9; --nick-f:#FF8A6E; --nick-o:#9498ab; }
+}
+
+.gchat-fab{
+  position:fixed; z-index:60;
+  right:16px; bottom:calc(16px + env(safe-area-inset-bottom,0px));
+  display:flex; align-items:center; gap:8px;
+  background:var(--coral); color:#fff;
+  border:2px solid var(--coral-deep); border-radius:999px;
+  padding:11px 16px; font-weight:800; font-size:14px;
+  box-shadow:var(--shadow-hard);
+}
+.gchat-fab:hover{transform:translate(-1px,-1px);}
+.gchat-badge{
+  min-width:20px; height:20px; padding:0 6px; border-radius:999px;
+  background:#fff; color:var(--coral-deep); font-size:12px; font-weight:800;
+  display:inline-flex; align-items:center; justify-content:center;
+}
+.gchat{
+  position:fixed; z-index:60;
+  right:16px; bottom:calc(72px + env(safe-area-inset-bottom,0px));
+  width:min(360px, calc(100vw - 32px)); height:min(500px, calc(100vh - 140px));
+  display:flex; flex-direction:column; overflow:hidden;
+  background:var(--surface); color:var(--fg);
+  border:2px solid var(--border-color); border-radius:var(--radius-md);
+  box-shadow:var(--shadow-hard);
+}
+.gchat-head{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:12px 14px; border-bottom:2px solid var(--border-color);
+}
+.gchat-head b{font-family:var(--font-display); font-size:17px; font-weight:600;}
+.gchat-online{margin-left:8px; font-size:12px; font-weight:700; color:var(--muted);}
+.gchat-close{
+  background:none; border:2px solid var(--border-color); color:var(--fg);
+  width:30px; height:30px; border-radius:50%; font-size:13px; font-weight:800;
+}
+.gchat-log{flex:1; overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column; gap:6px;}
+.gchat-empty{margin:auto; text-align:center; color:var(--muted); font-size:13px; font-weight:600;}
+.gmsg{font-size:13.5px; line-height:1.4; word-break:break-word; padding:6px 10px; border-radius:12px; background:var(--surface-2); align-self:flex-start; max-width:92%;}
+.gmsg b{font-weight:800; margin-right:6px;}
+.gmsg.g-m b{color:var(--nick-m);}
+.gmsg.g-f b{color:var(--nick-f);}
+.gmsg.g-o b{color:var(--nick-o);}
+.gmsg.me{align-self:flex-end; background:var(--coral); color:#fff;}
+.gmsg.me b{color:#fff;}
+.gchat-hint{padding:0 12px 10px; font-size:11px; color:var(--muted);}
+.gchat .chat-form{border-top:1px solid var(--border-color);}
+
+@media (max-width: 480px){
+  .gchat{right:12px; width:calc(100vw - 24px); height:min(70vh, 520px);}
+  .gchat-fab{right:12px;}
+}
+@media (prefers-reduced-motion: reduce){
+  .game-card, .gchat-fab, .toast{transition:none;}
+  .pulse-ring{animation:none;}
+}

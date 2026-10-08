@@ -140,20 +140,39 @@
     <span data-i18n="ad_slot">Ad space</span>
   </div>
 
+  <!-- ===== GLOBAL CHAT (для всех на сайте) ===== -->
+  <button class="gchat-fab" id="gchatFab" type="button" hidden>
+    <span aria-hidden="true">💬</span>
+    <span data-i18n="gchat_title">Global chat</span>
+    <span class="gchat-badge" id="gchatBadge" hidden>0</span>
+  </button>
+  <section class="gchat" id="gchat" hidden aria-labelledby="gchatTitle">
+    <header class="gchat-head">
+      <div>
+        <b id="gchatTitle" data-i18n="gchat_title">Global chat</b>
+        <span class="gchat-online" id="gchatOnline"></span>
+      </div>
+      <button class="gchat-close" id="gchatClose" type="button" aria-label="Close">✕</button>
+    </header>
+    <div class="gchat-log" id="gchatLog">
+      <p class="gchat-empty" id="gchatEmpty" data-i18n="gchat_empty">It's quiet here. Break the silence! 🦗</p>
+    </div>
+    <div class="emoji-row" id="gchatEmoji"></div>
+    <form class="chat-form" id="gchatForm" autocomplete="off">
+      <input id="gchatInput" maxlength="200" data-i18n-placeholder="gchat_placeholder" placeholder="Say something funny…" autocomplete="off">
+      <button type="submit">➤</button>
+    </form>
+    <p class="gchat-hint" data-i18n="gchat_hint">Words and funny emoji only — no links or phone numbers.</p>
+  </section>
+
   <div class="toast" id="toast"></div>
 </div>
 
 <script src="js/i18n.js"></script>
 <script src="js/games/tictactoe.js"></script>
-<script src="js/games/gomoku.js"></script>
-<script src="js/games/reversi.js"></script>
 <script src="js/games/checkers.js"></script>
 <script src="js/games/chess.js"></script>
-<script src="js/games/dots.js"></script>
 <script src="js/games/battleship.js"></script>
-<script src="js/games/hangman.js"></script>
-<script src="js/games/backgammon.js"></script>
-<script src="js/games/uno.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

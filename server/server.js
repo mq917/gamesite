@@ -1,22 +1,22 @@
 /**
- * "Битва полов" — игровой сервер.
- * Задача сервера ПРЕДЕЛЬНО узкая и намеренно "тупая":
+ * Two-Player Arena — игровой сервер.
+ * Задача сервера намеренно узкая:
  *   1. Держать список игр и счётчики онлайн/в очереди.
  *   2. Подбирать пару игроков (тот же game, противоположный пол,
  *      разница в возрасте в пределах текущего допуска).
  *   3. Спросить обоих "согласны сыграть?" и, если оба да — свести их в комнату.
- *   4. Внутри комнаты — тупо пересылать JSON-сообщения (ходы, чат) от одного к другому.
+ *   4. Внутри комнаты — пересылать JSON-сообщения (ходы, личный чат) от одного к другому.
+ *   5. Общий чат для всех подключённых: только слова и смайлики, без ссылок.
  *
- * Никаких данных нигде не сохраняется: ни на диск, ни в БД. Всё живёт только
- * в оперативной памяти процесса и исчезает при разрыве соединения (закрытии вкладки).
- * Вся игровая логика (правила, подсветка ходов, проверка победы) — на фронтенде,
- * сервер её не понимает и не проверяет.
+ * Ничего не сохраняется на диск и в БД: всё живёт в памяти процесса
+ * (включая последние 50 сообщений общего чата — они пропадают при перезапуске).
+ * Вся игровая логика (правила, подсветка ходов, проверка победы) — на фронтенде.
  */
 
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-const { WebSocketServer, WebSocket } = require('ws');
+const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
 
@@ -24,45 +24,24 @@ const GAMES = [
   { id: 'chess', name: 'Шахматы' },
   { id: 'checkers', name: 'Шашки' },
   { id: 'tictactoe', name: 'Крестики-нолики 5×5' },
-  { id: 'reversi', name: 'Реверси' },
-  { id: 'gomoku', name: 'Пять в ряд' },
-  { id: 'backgammon', name: 'Нарды' },
   { id: 'battleship', name: 'Морской бой' },
-  { id: 'dots', name: 'Точки и квадраты' },
-  { id: 'uno', name: 'Цветные карты' },
-  { id: 'hangman', name: 'Виселица' },
 ];
 const GAME_IDS = new Set(GAMES.map(g => g.id));
 
 // ---- статика фронтенда ----
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
-const server = http.createServer(async (req, res) => {
-  let reqPath = decodeURIComponent(req.url.split('?')[0]);
-
-  // Проверка английского слова для «Виселицы». Игровой процесс от этого
-  // сервиса не зависит: словарь используется только при вводе слова.
-  if (reqPath === '/api/check-word') {
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    const word = new URL(req.url, `http://${req.headers.host || 'localhost'}`).searchParams.get('word') || '';
-    if (!/^[a-z]+$/i.test(word) || word.length < 2 || word.length > 24) {
-      res.writeHead(200); return res.end(JSON.stringify({ valid:false }));
-    }
-    try {
-      const r = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(word));
-      res.writeHead(200); return res.end(JSON.stringify({ valid:r.ok }));
-    } catch (e) {
-      res.writeHead(200); return res.end(JSON.stringify({ valid:null }));
-    }
-  }
+const server = http.createServer((req, res) => {
+  let reqPath;
+  try { reqPath = decodeURIComponent(req.url.split('?')[0]); } catch (e) { res.writeHead(400); return res.end(); }
   if (reqPath === '/') reqPath = '/index.html';
   const filePath = path.join(PUBLIC_DIR, reqPath);
   if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end(); }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     const ext = path.extname(filePath);
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(data);
   });
 });
@@ -77,6 +56,29 @@ GAMES.forEach(g => queues.set(g.id, new Set()));
 const rooms = new Map();   // roomId -> {a, b, game, rematch:Set}
 let nextRoomId = 1;
 
+// ---- общий чат ----
+const GLOBAL_MAX_LEN = 200;
+const GLOBAL_HISTORY_LIMIT = 50;
+const GLOBAL_MIN_INTERVAL_MS = 1200;
+const globalHistory = [];
+let nextGlobalMsgId = 1;
+
+// Оставляем только слова, цифры (не длинные), простую пунктуацию и эмодзи.
+function sanitizeGlobalText(raw) {
+  let t = String(raw == null ? '' : raw).normalize('NFC');
+  t = Array.from(t).slice(0, GLOBAL_MAX_LEN * 2).join('');
+  t = t
+    .replace(/(?:https?:\/\/|www\.)\S+/gi, '')                         // ссылки
+    .replace(/\S+@\S+\.\S+/g, '')                                      // e-mail
+    .replace(/[\p{L}\p{N}-]+\.(?:com|ru|net|org|io|me|az|info|biz|xyz|ly|gg|tv|co|рф)\b\S*/giu, '') // домены
+    .replace(/\+?\d[\d\s().-]{6,}\d/g, '')                             // телефоны
+    .replace(/\d{5,}/g, '')                                            // длинные числа
+    .replace(/[^\p{L}\p{M}\p{N}\s.,!?:;'"()\-…\p{Extended_Pictographic}\p{Emoji_Modifier}\u200d\ufe0f]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return Array.from(t).slice(0, GLOBAL_MAX_LEN).join('').trim();
+}
+
 function otherGender(g) {
   if (g === 'm') return 'f';
   if (g === 'f') return 'm';
@@ -90,7 +92,7 @@ function ageToleranceFor(session) {
 }
 
 function safeSend(ws, obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (ws.readyState === ws.OPEN) {
     try { ws.send(JSON.stringify(obj)); } catch (e) { /* ignore */ }
   }
 }
@@ -127,6 +129,8 @@ function tryMatch(gameId) {
       // нашли пару — предлагаем обоим, ждём подтверждения
       a.pendingProposal = b.id;
       b.pendingProposal = a.id;
+      a.acceptedProposal = null;
+      b.acceptedProposal = null;
       safeSend(a.ws, { type: 'match_proposed', opponent: publicProfile(b) });
       safeSend(b.ws, { type: 'match_proposed', opponent: publicProfile(a) });
       return; // по одной паре за раз, дальше по таймеру/событию
@@ -154,8 +158,9 @@ function leaveQueue(session, { keepAvoid } = {}) {
 
 function clearPendingBoth(session, opponentId, gameId) {
   session.pendingProposal = null;
+  session.acceptedProposal = null;
   const opp = findSessionById(gameId, opponentId);
-  if (opp) opp.pendingProposal = null;
+  if (opp) { opp.pendingProposal = null; opp.acceptedProposal = null; }
   return opp;
 }
 
@@ -170,7 +175,7 @@ function makeRoom(gameId, a, b) {
   safeSend(b.ws, { type: 'match_confirmed', opponent: publicProfile(a), youAre: 'B', game: gameId });
 }
 
-function closeRoom(roomId, reasonForOther) {
+function closeRoom(roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
   rooms.delete(roomId);
@@ -183,13 +188,16 @@ wss.on('connection', (ws) => {
   const session = {
     id: nextId++,
     ws,
+    ready: false,
     nick: '',
     gender: null,
     age: null,
     game: null,
     room: null,
     pendingProposal: null,
+    acceptedProposal: null,
     queueStartedAt: 0,
+    lastGlobalAt: 0,
     avoid: new Set(), // id соперников, которых этот игрок отклонил (не предлагать снова пока не закроет вкладку)
   };
   clients.set(ws, session);
@@ -202,6 +210,7 @@ wss.on('connection', (ws) => {
 
     switch (msg.type) {
       case 'hello': {
+        if (session.ready) return;
         const nick = String(msg.nick || '').slice(0, 20).trim() || 'Игрок';
         const gender = ['m', 'f', 'o'].includes(msg.gender) ? msg.gender : 'o';
         let age = parseInt(msg.age, 10);
@@ -210,11 +219,14 @@ wss.on('connection', (ws) => {
         session.nick = nick;
         session.gender = gender;
         session.age = age;
-        safeSend(ws, { type: 'hello_ok' });
+        session.ready = true;
+        safeSend(ws, { type: 'hello_ok', id: session.id });
+        safeSend(ws, { type: 'global_history', messages: globalHistory });
         break;
       }
 
       case 'queue': {
+        if (!session.ready) return;
         if (!GAME_IDS.has(msg.game)) return;
         if (session.room) return;
         if (session.game) leaveQueue(session);
@@ -241,12 +253,12 @@ wss.on('connection', (ws) => {
         const oppId = session.pendingProposal;
         if (!gameId || !oppId) return;
         const opp = findSessionById(gameId, oppId);
-        if (!opp) { session.pendingProposal = null; break; }
+        if (!opp) { session.pendingProposal = null; session.acceptedProposal = null; break; }
 
         if (!msg.accept) {
           session.avoid.add(opp.id);
-          session.pendingProposal = null;
-          opp.pendingProposal = null;
+          session.pendingProposal = null; session.acceptedProposal = null;
+          opp.pendingProposal = null; opp.acceptedProposal = null;
           safeSend(opp.ws, { type: 'match_declined' });
           // и себе тоже "declined", чтобы фронт вернулся в очередь
           safeSend(ws, { type: 'match_declined' });
@@ -271,16 +283,36 @@ wss.on('connection', (ws) => {
         break;
       }
 
-      case 'chat': {
+      case 'chat': { // личный чат в комнате
         const room = session.room && rooms.get(session.room);
         if (!room) return;
         let text = String(msg.text || '').slice(0, 300);
-        // только текст/эмодзи, никаких ссылок
         text = text.replace(/https?:\/\/\S+/gi, '').replace(/\b\S+\.(com|ru|net|org|io|me|рф)\S*/gi, '');
         text = text.trim();
         if (!text) return;
         const opp = room.a === session ? room.b : room.a;
         safeSend(opp.ws, { type: 'opponent_chat', text });
+        break;
+      }
+
+      case 'global_chat': { // общий чат для всех
+        if (!session.ready) return;
+        const now = Date.now();
+        if (now - session.lastGlobalAt < GLOBAL_MIN_INTERVAL_MS) {
+          safeSend(ws, { type: 'global_error', reason: 'slow' });
+          return;
+        }
+        const text = sanitizeGlobalText(msg.text);
+        if (!text) {
+          safeSend(ws, { type: 'global_error', reason: 'rejected' });
+          return;
+        }
+        session.lastGlobalAt = now;
+        const entry = { id: nextGlobalMsgId++, from: session.id, nick: session.nick, gender: session.gender, text, ts: now };
+        globalHistory.push(entry);
+        if (globalHistory.length > GLOBAL_HISTORY_LIMIT) globalHistory.shift();
+        const out = { type: 'global_chat', message: entry };
+        for (const [cws, s] of clients) if (s.ready) safeSend(cws, out);
         break;
       }
 
@@ -339,9 +371,7 @@ setInterval(() => {
   tryMatchAll();
 }, 3000);
 
-// Явно слушаем 0.0.0.0 — на Render (и большинстве PaaS) прокси стучится
-// снаружи контейнера, и если слушать только 127.0.0.1, снаружи сервис
-// недоступен и деплой зависает на "Application loading...".
+// Слушаем 0.0.0.0 — на Render и большинстве PaaS прокси стучится снаружи контейнера.
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on 0.0.0.0:${PORT}`);
 });

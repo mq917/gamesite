@@ -1,15 +1,17 @@
 (function(){
 window.GAME_MODULES = window.GAME_MODULES || {};
 
+// Крестики-нолики 5×5. A = ✕ (ходит первым), B = ◯.
 window.GAME_MODULES.tictactoe = function(ctx){
   const { container, youAre, sendMove, setStatus } = ctx;
   const T = window.I18N.t;
-  const SIZE = 5, WIN_LEN = 3;
+  const SIZE = 5, WIN_LEN = 3;   // WIN_LEN: сколько в ряд нужно для победы
   const myMark = youAre === 'A' ? '✕' : '◯';
   const oppMark = youAre === 'A' ? '◯' : '✕';
   let cells = Array(SIZE*SIZE).fill(null);
   let turn = 'A';
   let over = false;
+  let lastIdx = null;
 
   container.innerHTML = '';
   const grid = document.createElement('div');
@@ -28,6 +30,13 @@ window.GAME_MODULES.tictactoe = function(ctx){
     cellEls.push(c);
   }
 
+  function markLast(i){
+    if(lastIdx!==null) cellEls[lastIdx].style.boxShadow = 'none';
+    lastIdx = i;
+    // подсветка последнего хода (своего или соперника), чтобы ход был заметен
+    cellEls[i].style.boxShadow = 'inset 0 0 0 3px #F2B705';
+  }
+
   function tryPlace(i){
     if(over || turn !== youAre || cells[i]) return;
     place(i, youAre);
@@ -38,6 +47,8 @@ window.GAME_MODULES.tictactoe = function(ctx){
     cells[i] = who;
     cellEls[i].textContent = who === 'A' ? '✕' : '◯';
     cellEls[i].style.color = who === 'A' ? 'var(--coral)' : 'var(--teal-deep)';
+    cellEls[i].style.cursor = 'default';
+    markLast(i);
     const win = checkWin(who);
     if(win){
       over = true;
@@ -81,8 +92,11 @@ window.GAME_MODULES.tictactoe = function(ctx){
   return { isOver:()=>over,
 
     receiveMove(payload){
-      if(over) return;
-      place(payload.index, turn); // it's opponent's turn by construction
+      if(over || !payload) return;
+      const i = payload.index;
+      // защита от рассинхронизации и мусора: ход только от соперника в свободную клетку
+      if(!Number.isInteger(i) || i<0 || i>=SIZE*SIZE || cells[i] || turn===youAre) return;
+      place(i, turn);
     }
   };
 };

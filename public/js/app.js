@@ -3,25 +3,26 @@
 const T = (key, vars) => window.I18N.t(key, vars);
 
 /* ============ GAMES CATALOG ============ */
-const GAME_IDS = ['chess','checkers','tictactoe','reversi','gomoku','backgammon','battleship','dots','uno','hangman'];
-const GAME_ICONS = {
-  chess:'♞', checkers:'⛁', tictactoe:'⌗', reversi:'⬤', gomoku:'●',
-  backgammon:'🎲', battleship:'🚢', dots:'▦', uno:'🃏', hangman:'🙈'
-};
+const GAME_IDS = ['chess','checkers','tictactoe','battleship'];
+const GAME_ICONS = { chess:'♞', checkers:'⛁', tictactoe:'⌗', battleship:'🚢' };
 function gameMeta(id){
   return { id, icon: GAME_ICONS[id], name: T('game_'+id+'_name'), desc: T('game_'+id+'_desc') };
 }
+// личный чат с соперником
 const EMOJIS = ['😂','🤣','😎','😜','🔥','💪','👍','👎','😱','🥳','🤯','😢','❤️','🎉','🤔','😏','👀','🙌','💀','😴'];
+// общий чат — смешные смайлики
+const GLOBAL_EMOJIS = ['😂','🤣','😜','🤪','😎','🥳','🤡','👻','💩','🙈','🙉','🙊','🐸','🦄','🐒','🍕','🍌','🔥','🎉','🤯','😱','🥴','😏','🤓'];
 
 /* ============ STATE ============ */
 const state = {
   ws:null,
   connected:false,
+  myId:null,
   me:{ nick:'', gender:'o', age:25 },
   currentQueueGame:null,
   waitingSince:0,
-  room:null,           // { game, youAre, opponent }
-  gameHandle:null,      // {receiveMove}
+  room:null,           // { game, youAre, opponent, opponentLeft }
+  gameHandle:null,     // {receiveMove, isOver}
   chatHistory:[],
 };
 
@@ -41,6 +42,9 @@ const els = {
   chatLog:$('chatLog'), chatForm:$('chatForm'), chatInput:$('chatInput'), emojiRow:$('emojiRow'),
   toast:$('toast'), adSlotBottom:$('adSlotBottom'),
   finishActions:$('finishActions'), rematchBtn:$('rematchBtn'), backLobbyBtn:$('backLobbyBtn'),
+  gchatFab:$('gchatFab'), gchatBadge:$('gchatBadge'), gchat:$('gchat'), gchatClose:$('gchatClose'),
+  gchatOnline:$('gchatOnline'), gchatLog:$('gchatLog'), gchatEmpty:$('gchatEmpty'),
+  gchatEmoji:$('gchatEmoji'), gchatForm:$('gchatForm'), gchatInput:$('gchatInput'),
 };
 
 /* ============ TOAST ============ */
@@ -95,7 +99,9 @@ function refreshDynamicTexts(){
   if(state.room && !els.room.hidden){
     els.vsYou.textContent = state.me.nick + T('you_suffix');
     els.roomGameName.textContent = gameMeta(state.room.game).name;
+    if(!els.finishActions.hidden) showFinishActions();
   }
+  updateGlobalOnline();
 }
 
 /* ============ SETUP MODAL ============ */
@@ -120,6 +126,7 @@ els.setupContinue.addEventListener('click', ()=>{
   state.me.age = parseInt(els.ageInput.value,10);
   els.setupBackdrop.hidden = true;
   els.lobby.hidden = false;
+  els.gchatFab.hidden = false;
   connect();
 });
 
@@ -143,8 +150,11 @@ function renderLobby(){
 }
 renderLobby();
 
+let onlineNow = 0;
 function updateStatsUI(stats){
+  onlineNow = stats.online;
   els.onlineCount.textContent = stats.online;
+  updateGlobalOnline();
   Object.keys(stats.perGame||{}).forEach(gid=>{
     gStats[gid] = stats.perGame[gid];
     const el = els.gameGrid.querySelector('.w-'+gid);
@@ -181,7 +191,19 @@ function send(obj){
 let waitingTimerInterval=null;
 function handleServerMessage(msg){
   switch(msg.type){
+    case 'hello_ok': state.myId = msg.id; break;
     case 'stats': updateStatsUI(msg); break;
+
+    case 'global_history': {
+      els.gchatLog.querySelectorAll('.gmsg').forEach(n=>n.remove());
+      (msg.messages||[]).forEach(m=>addGlobalMsg(m, true));
+      break;
+    }
+    case 'global_chat': addGlobalMsg(msg.message, false); break;
+    case 'global_error': {
+      toast(msg.reason==='slow' ? T('gchat_slow') : T('gchat_rejected'));
+      break;
+    }
 
     case 'match_proposed': {
       showProposal(msg.opponent);
@@ -212,14 +234,21 @@ function handleServerMessage(msg){
       break;
     }
     case 'rematch_start': {
+      if(!state.room) break;
       rematchRequested=false;
+      // в реванше стороны меняются: кто ходил первым, теперь ходит вторым
+      state.room.youAre = state.room.youAre==='A' ? 'B' : 'A';
+      addChatMsg('sys', T('rematch_swapped'));
       restartCurrentGame();
       break;
     }
     case 'opponent_left': {
+      if(!state.room) break;
+      state.room.opponentLeft = true;
       addChatMsg('sys', T('opponent_left_chat'));
       els.boardStatus.textContent = T('opponent_left_status');
       toast(T('opponent_left_toast'));
+      showFinishActions(); // реванша не будет — остаётся только «в меню»
       break;
     }
   }
@@ -256,9 +285,7 @@ els.cancelQueue.addEventListener('click', ()=>{
 
 /* ============ PROPOSAL ============ */
 function genderWord(g){ return g==='m' ? T('gender_short_m') : g==='f' ? T('gender_short_f') : T('gender_short_o'); }
-let lastProposalOpponent = null;
 function showProposal(opp){
-  lastProposalOpponent = opp;
   els.waitingBackdrop.hidden = true;
   els.proposalBackdrop.hidden = false;
   els.oppAvatar.textContent = (opp.nick||'?').slice(0,1).toUpperCase();
@@ -277,7 +304,6 @@ els.declineMatch.addEventListener('click', ()=>{
   showWaiting(state.currentQueueGame);
 });
 
-
 /* ============ FINISH / REMATCH ============ */
 let finishPoll=null;
 let rematchRequested=false;
@@ -285,6 +311,12 @@ let rematchRequested=false;
 function showFinishActions(){
   if(!state.room) return;
   els.finishActions.hidden = false;
+  if(state.room.opponentLeft){
+    // соперник ушёл — реванш невозможен
+    els.rematchBtn.hidden = true;
+    return;
+  }
+  els.rematchBtn.hidden = false;
   if(rematchRequested){
     els.rematchBtn.disabled = true;
     els.rematchBtn.textContent = T('rematch_waiting');
@@ -295,6 +327,7 @@ function showFinishActions(){
 }
 function hideFinishActions(){
   els.finishActions.hidden = true;
+  els.rematchBtn.hidden = false;
   els.rematchBtn.disabled = false;
   rematchRequested=false;
   els.rematchBtn.textContent = T('rematch');
@@ -303,24 +336,27 @@ function pollGameFinished(){
   if(!state.room || !state.gameHandle) return;
   if(typeof state.gameHandle.isOver === 'function' && state.gameHandle.isOver()) showFinishActions();
 }
+function mountGame(){
+  const {game,youAre} = state.room;
+  const factory = window.GAME_MODULES && window.GAME_MODULES[game];
+  if(!factory){ els.boardWrap.textContent = 'This game is still being prepared.'; return; }
+  state.gameHandle = factory({
+    container: els.boardWrap,
+    youAre,
+    sendMove: (payload)=>send({ type:'game_move', payload }),
+    setStatus: (text)=>{ els.boardStatus.textContent = text; },
+    onGameOver: showFinishActions
+  });
+}
 function restartCurrentGame(){
   if(!state.room) return;
   hideFinishActions();
   els.boardWrap.innerHTML='';
   els.boardStatus.textContent=T('rematch_starting');
-  const {game,youAre,opponent}=state.room;
-  const factory=window.GAME_MODULES && window.GAME_MODULES[game];
-  if(factory){
-    state.gameHandle=factory({
-      container:els.boardWrap, youAre,
-      sendMove:(payload)=>send({type:'game_move',payload}),
-      setStatus:(text)=>{ els.boardStatus.textContent=text; },
-      onGameOver:showFinishActions
-    });
-  }
+  mountGame();
 }
 els.rematchBtn.addEventListener('click',()=>{
-  if(!state.room || rematchRequested) return;
+  if(!state.room || state.room.opponentLeft || rematchRequested) return;
   rematchRequested=true;
   els.rematchBtn.disabled=true;
   els.rematchBtn.textContent=T('rematch_waiting');
@@ -339,7 +375,7 @@ function enterRoom(gameId, youAre, opponent){
   els.waitingBackdrop.hidden = true;
   els.proposalBackdrop.hidden = true;
   state.currentQueueGame = null;
-  state.room = { game:gameId, youAre, opponent };
+  state.room = { game:gameId, youAre, opponent, opponentLeft:false };
   state.chatHistory = [];
 
   els.lobby.hidden = true;
@@ -353,20 +389,8 @@ function enterRoom(gameId, youAre, opponent){
   els.chatLog.innerHTML = '';
   addChatMsg('sys', T('opponent_found_chat', { name:opponent.nick }));
 
-  renderEmojiRow();
-
-  const factory = window.GAME_MODULES && window.GAME_MODULES[gameId];
-  if(factory){
-    state.gameHandle = factory({
-      container: els.boardWrap,
-      youAre,
-      sendMove: (payload)=>send({ type:'game_move', payload }),
-      setStatus: (text)=>{ els.boardStatus.textContent = text; },
-      onGameOver: showFinishActions
-    });
-  } else {
-    els.boardWrap.textContent = 'This game is still being prepared.';
-  }
+  renderEmojiRow(els.emojiRow, EMOJIS, els.chatInput);
+  mountGame();
   finishPoll = setInterval(pollGameFinished, 250);
 }
 
@@ -384,17 +408,17 @@ function backToLobby(){
   els.adSlotBottom.hidden = false;
 }
 
-/* ============ CHAT ============ */
-function renderEmojiRow(){
-  els.emojiRow.innerHTML = '';
-  EMOJIS.forEach(e=>{
+/* ============ PRIVATE CHAT (с соперником) ============ */
+function renderEmojiRow(row, list, input){
+  row.innerHTML = '';
+  list.forEach(e=>{
     const b = document.createElement('button');
     b.type = 'button'; b.textContent = e;
     b.addEventListener('click', ()=>{
-      els.chatInput.value += e;
-      els.chatInput.focus();
+      input.value += e;
+      input.focus();
     });
-    els.emojiRow.appendChild(b);
+    row.appendChild(b);
   });
 }
 function addChatMsg(kind, text){
@@ -413,6 +437,59 @@ els.chatForm.addEventListener('submit', (e)=>{
   send({ type:'chat', text:cleaned });
   addChatMsg('me', cleaned);
   els.chatInput.value = '';
+});
+
+/* ============ GLOBAL CHAT (для всех на сайте) ============ */
+let gchatOpen = false;
+let gchatUnread = 0;
+renderEmojiRow(els.gchatEmoji, GLOBAL_EMOJIS, els.gchatInput);
+
+function updateGlobalOnline(){
+  els.gchatOnline.textContent = onlineNow ? T('gchat_online', { n:onlineNow }) : '';
+}
+function setGlobalChatOpen(open){
+  gchatOpen = open;
+  els.gchat.hidden = !open;
+  if(open){
+    gchatUnread = 0;
+    els.gchatBadge.hidden = true;
+    els.gchatLog.scrollTop = els.gchatLog.scrollHeight;
+    els.gchatInput.focus();
+  }
+}
+els.gchatFab.addEventListener('click', ()=>setGlobalChatOpen(!gchatOpen));
+els.gchatClose.addEventListener('click', ()=>setGlobalChatOpen(false));
+
+function addGlobalMsg(m, fromHistory){
+  if(!m || typeof m.text !== 'string') return;
+  if(els.gchatEmpty.parentNode) els.gchatEmpty.remove();
+  const nearBottom = els.gchatLog.scrollHeight - els.gchatLog.scrollTop - els.gchatLog.clientHeight < 60;
+  const div = document.createElement('div');
+  const g = ['m','f','o'].includes(m.gender) ? m.gender : 'o';
+  const mine = m.from === state.myId;
+  div.className = 'gmsg g-' + g + (mine ? ' me' : '');
+  const nick = document.createElement('b');
+  nick.textContent = m.nick;
+  const text = document.createElement('span');
+  text.textContent = m.text;
+  div.appendChild(nick);
+  div.appendChild(text);
+  els.gchatLog.appendChild(div);
+  const all = els.gchatLog.querySelectorAll('.gmsg');
+  if(all.length > 100) all[0].remove();
+  if(mine || nearBottom || fromHistory) els.gchatLog.scrollTop = els.gchatLog.scrollHeight;
+  if(!gchatOpen && !fromHistory && !mine){
+    gchatUnread++;
+    els.gchatBadge.textContent = gchatUnread > 99 ? '99+' : String(gchatUnread);
+    els.gchatBadge.hidden = false;
+  }
+}
+els.gchatForm.addEventListener('submit', (e)=>{
+  e.preventDefault();
+  const text = els.gchatInput.value.trim();
+  if(!text) return;
+  send({ type:'global_chat', text });  // сервер отфильтрует и разошлёт всем, включая отправителя
+  els.gchatInput.value = '';
 });
 
 })();

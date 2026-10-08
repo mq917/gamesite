@@ -12,6 +12,7 @@ window.GAME_MODULES.chess = function(ctx){
   // board[r][c] = {type:'p|n|b|r|q|k', side:'A'|'B', moved:bool} or null
   let board, turn, over, enPassant, selected, legalForSelected;
   let halfmoveNoCapture=0;
+  let lastMove=null;   // {from,to} — последний ход, подсвечивается у обоих игроков
 
   function initBoard(){
     board = Array.from({length:N}, ()=>Array(N).fill(null));
@@ -45,6 +46,8 @@ window.GAME_MODULES.chess = function(ctx){
     const el=document.createElement('div');
     const dark=(r+c)%2===1;
     el.style.cssText=`width:${CELL}px;height:${CELL}px;background:${dark?'#b58863':'#f0d9b5'};display:flex;align-items:center;justify-content:center;font-size:30px;cursor:pointer;position:relative;`;
+    el.dataset.base = dark?'#b58863':'#f0d9b5';
+    el.dataset.last = dark?'#aaa23a':'#cdd26a';
     el.addEventListener('click', ()=>onCellClick(r,c));
     grid.appendChild(el);
     cellEls[r][c]=el;
@@ -173,8 +176,9 @@ window.GAME_MODULES.chess = function(ctx){
   function onCellClick(r,c){
     if(over||turn!==youAre) return;
     if(selected && legalForSelected.some(([lr,lc])=>lr===r&&lc===c)){
-      doMove(selected,[r,c]);
-      sendMove({ from:selected, to:[r,c] });
+      const from = selected;            // doMove сбрасывает selected — запоминаем заранее
+      doMove(from,[r,c]);
+      sendMove({ from, to:[r,c] });
       return;
     }
     const p=board[r][c];
@@ -190,6 +194,7 @@ window.GAME_MODULES.chess = function(ctx){
     const wasTwoStep = wasPawn && Math.abs(tr-fr)===2;
     const capture = !!board[tr][tc] || (wasPawn && fc!==tc && !board[tr][tc]);
     simulateMove(board, from, to, p);
+    lastMove={ from:[fr,fc], to:[tr,tc] };
     enPassant = wasTwoStep ? [(fr+tr)/2, fc] : null;
     selected=null; legalForSelected=[];
     halfmoveNoCapture = capture ? 0 : halfmoveNoCapture+1;
@@ -224,21 +229,21 @@ window.GAME_MODULES.chess = function(ctx){
   }
 
   function render(){
+    const isLast=(r,c)=>lastMove && ((lastMove.from[0]===r&&lastMove.from[1]===c)||(lastMove.to[0]===r&&lastMove.to[1]===c));
+    const kp = findKing(board, turn);
+    const checked = kp && attacksSquare(board, turn===WHITE?BLACK:WHITE, kp[0], kp[1]);
     for(let r=0;r<N;r++)for(let c=0;c<N;c++){
       const el=cellEls[r][c];
       const p=board[r][c];
       el.textContent = p ? GLYPH[p.type][p.side] : '';
+      el.style.background = isLast(r,c) ? el.dataset.last : el.dataset.base;
       el.style.boxShadow='none';
       el.style.outline='none';
     }
+    if(checked) cellEls[kp[0]][kp[1]].style.boxShadow='inset 0 0 0 4px #D9502F';
     if(selected) cellEls[selected[0]][selected[1]].style.boxShadow='inset 0 0 0 3px var(--coral)';
     legalForSelected.forEach(([r,c])=>{
-      cellEls[r][c].style.boxShadow = board[r][c] ? 'inset 0 0 0 4px var(--teal)' : 'inset 0 0 0 4px var(--teal)';
-      if(!board[r][c]){
-        const dot=document.createElement('div');
-        dot.style.cssText='position:absolute;width:14px;height:14px;border-radius:50%;background:rgba(33,169,154,.75);';
-        cellEls[r][c].style.position='relative';
-      }
+      cellEls[r][c].style.boxShadow='inset 0 0 0 4px var(--teal)';
     });
   }
   setStatus(turn===youAre?T('chess_your_turn'):T('opp_turn'));
@@ -247,7 +252,7 @@ window.GAME_MODULES.chess = function(ctx){
   return { isOver:()=>over,
 
     receiveMove(payload){
-      if(over || !payload || !Array.isArray(payload.from) || !Array.isArray(payload.to)) return;
+      if(over || turn===youAre || !payload || !Array.isArray(payload.from) || !Array.isArray(payload.to)) return;
       const [fr,fc]=payload.from, [tr,tc]=payload.to;
       const p=board[fr] && board[fr][fc];
       // При рассинхронизации не ломаем обработчик WebSocket.

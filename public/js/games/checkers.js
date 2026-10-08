@@ -14,6 +14,8 @@ window.GAME_MODULES.checkers = function(ctx){
   let over=false;
   let selected=null; // [r,c]
   let legalForSelected=[]; // [{to:[r,c], captured:[[r,c],...], path:[[r,c],...]}]
+  let chain=null;          // [r,c] — шашка, которая обязана продолжить взятие
+  let lastMove=null;       // {from:[r,c], to:[r,c]} — последний ход (виден обоим игрокам)
   const flip = youAre==='B';
 
   container.innerHTML='';
@@ -30,7 +32,7 @@ window.GAME_MODULES.checkers = function(ctx){
     el.className='sq';
     const dark=(r+c)%2===1;
     el.style.cssText=`width:${CELL}px;height:${CELL}px;background:${dark?'#7a5a43':'#e9d9c4'};cursor:pointer;position:relative;`;
-    el.dataset.r=r; el.dataset.c=c;
+    el.dataset.r=r; el.dataset.c=c; el.dataset.base=dark?'#7a5a43':'#e9d9c4';
     el.addEventListener('click', ()=>onCellClick(r,c));
     grid.appendChild(el);
     cellEls[r] = cellEls[r]||[];
@@ -105,8 +107,16 @@ window.GAME_MODULES.checkers = function(ctx){
     const p = board[r][c];
     if(selected && legalForSelected.some(m=>m.to[0]===r&&m.to[1]===c)){
       const move = legalForSelected.find(m=>m.to[0]===r&&m.to[1]===c);
-      doMove(selected, move);
-      sendMove({ from:selected, to:move.to, captured:move.captured });
+      const from = selected;
+      doMove(from, move);
+      sendMove({ from, to:move.to, captured:move.captured });
+      return;
+    }
+    if(chain){
+      // в середине серии взятий можно ходить только той же шашкой
+      if(chain[0]===r && chain[1]===c){
+        selected=[r,c]; legalForSelected=pieceCaptures(r,c,board[r][c]); render();
+      }
       return;
     }
     if(p && p.side===youAre){
@@ -125,17 +135,21 @@ window.GAME_MODULES.checkers = function(ctx){
     move.captured.forEach(([cr,cc])=>board[cr][cc]=null);
     if((p.side==='A'&&tr===0)||(p.side==='B'&&tr===N-1)) p.king=true;
     board[tr][tc]=p;
+    lastMove={ from:[fr,fc], to:[tr,tc] };
 
-    // цепочка захвата тем же зверем
+    // серия взятий той же шашкой
     if(move.captured.length){
       const more = pieceCaptures(tr,tc,p);
       if(more.length){
-        selected=[tr,tc]; legalForSelected=more; render();
+        chain=[tr,tc];
+        if(turn===youAre){ selected=[tr,tc]; legalForSelected=more; }
+        else { selected=null; legalForSelected=[]; }   // у наблюдающего подсказок нет
+        render();
         setStatus(turn===youAre ? T('checkers_continue_you') : T('checkers_continue_opp'));
         return;
       }
     }
-    selected=null; legalForSelected=[];
+    chain=null; selected=null; legalForSelected=[];
     endTurn();
   }
 
@@ -164,6 +178,8 @@ window.GAME_MODULES.checkers = function(ctx){
   function render(){
     for(let r=0;r<N;r++)for(let c=0;c<N;c++){
       const el=cellEls[r][c]; el.innerHTML=''; el.style.boxShadow='none';
+      const isLast = lastMove && ((lastMove.from[0]===r&&lastMove.from[1]===c)||(lastMove.to[0]===r&&lastMove.to[1]===c));
+      el.style.background = isLast ? '#b39a3a' : el.dataset.base;
       const p=board[r][c];
       if(p){
         const d=document.createElement('div');
@@ -189,13 +205,14 @@ window.GAME_MODULES.checkers = function(ctx){
   return { isOver:()=>over,
 
     receiveMove(payload){
-      if(over || !payload || !Array.isArray(payload.from) || !Array.isArray(payload.to)) return;
-      const p = board[payload.from[0]] && board[payload.from[0]][payload.from[1]];
+      if(over || turn===youAre || !payload || !Array.isArray(payload.from) || !Array.isArray(payload.to)) return;
+      const [fr,fc]=payload.from;
+      const p = board[fr] && board[fr][fc];
       if(!p || p.side!==turn) return;
-      const moves=movesFor(payload.from[0],payload.from[1]);
-      const move=moves.find(m=>m.to[0]===payload.to[0]&&m.to[1]===payload.to[1]);
-      if(!move) return;
-      doMove(payload.from, {to:payload.to,captured:Array.isArray(payload.captured)?payload.captured:move.captured});
+      if(chain && (chain[0]!==fr || chain[1]!==fc)) return;   // серия взятий — только той же шашкой
+      const move=movesFor(fr,fc).find(m=>m.to[0]===payload.to[0]&&m.to[1]===payload.to[1]);
+      if(!move) return;   // нелегальный ход игнорируем, считаем по своим правилам
+      doMove(payload.from, move);
       render();
     }
   };
